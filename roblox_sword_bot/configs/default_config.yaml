@@ -109,7 +109,7 @@ humanization:
 # Inference settings
 inference:
   fps_limit: 60  # Match game FPS
-  confidence_threshold: 0.7  # Minimum confidence to execute action
+  confidence_threshold: 0.0  # LOWERED TO 0.0 - ALWAYS take the most likely action
   smoothing_window: 3  # Frame averaging for smoother movements
   safety_mode: true  # Enable anti-detection features
 
