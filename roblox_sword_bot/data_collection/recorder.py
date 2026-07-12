@@ -34,7 +34,7 @@ class DataRecorder:
         
         # Initialize components
         self.screen_capture = ScreenCapture(
-            resolution=tuple(self.config.get('capture', {}).get('resolution', [320, 180])),
+            resolution=tuple(self.config.get('capture', {}).get('resolution', [800, 600])),
             fps=self.config.get('capture', {}).get('fps', 30)
         )
         

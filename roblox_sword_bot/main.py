@@ -200,7 +200,7 @@ def run_bot(args):
         controller = BotController(model_path=args.model, config=config.config)
         
         print("\n⚠️  IMPORTANT: Make sure Roblox is running!")
-        print("Press Ctrl+C to stop the bot\n")
+        print("Press ESC to hard-kill the bot at any time\n")
         
         controller.run()
         

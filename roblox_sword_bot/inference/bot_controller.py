@@ -1,18 +1,24 @@
 """
 Bot Controller - Runs the trained model to play Roblox automatically
+
+FIXED: Async ESC kill-switch via pynput + os._exit(0).
 """
 import torch
 import numpy as np
 import time
+import os
+import threading
 from pathlib import Path
 from typing import Dict, Optional
+
+import pynput.keyboard
 
 from utils.config import load_config
 from feature_extraction.screen_processor import ScreenCapture
 from feature_extraction.color_detector import ColorDetector
 from feature_extraction.feature_engineer import FeatureEngineer
 from models.network import MLPNetwork
-from utils.input_control import InputController
+from utils.input_control import InputController, _start_esc_kill_switch
 
 
 class BotController:
@@ -55,7 +61,7 @@ class BotController:
         
         # Initialize components
         self.screen_capture = ScreenCapture(
-            resolution=tuple(self.config.get('capture', {}).get('resolution', [320, 180])),
+            resolution=tuple(self.config.get('capture', {}).get('resolution', [800, 600])),
             fps=self.config.get('capture', {}).get('fps', 30)
         )
         
@@ -159,7 +165,10 @@ class BotController:
     def run(self):
         """Main bot loop"""
         print("\n🤖 Bot starting...")
-        print("Press Ctrl+C to stop\n")
+        print("Press ESC to hard-kill the process at any time\n")
+        
+        # Arm the ESC kill-switch (idempotent — safe to call again)
+        _start_esc_kill_switch()
         
         self.running = True
         self.feature_engineer.reset()
@@ -227,3 +236,4 @@ if __name__ == "__main__":
     print("1. Train a model first: python main.py train_bc")
     print("2. Run the bot: python main.py run --model checkpoints/best_model.pth")
     print("\n⚠️  WARNING: This will control your keyboard and mouse!")
+    print("🔑  Press ESC at any time to hard-kill the process.")

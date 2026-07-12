@@ -10,9 +10,9 @@ hardware:
 
 # Screen capture settings
 capture:
-  resolution: [320, 180]  # Downscaled resolution for faster processing
+  resolution: [800, 600]  # Strict bounding box captured at OS level (no resize)
   fps: 30  # Target capture FPS
-  region: null  # null = full screen, or [x, y, width, height]
+  region: null  # null = centered 800x600 box, or [left, top, width, height]
   compression_level: 1  # JPEG compression (1-100, lower=faster)
 
 # Feature extraction settings

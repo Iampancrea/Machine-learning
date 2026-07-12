@@ -1,14 +1,48 @@
 """
-Keyboard and mouse control module using PyAutoGUI and Pynput
+Keyboard and mouse control module using pydirectinput-rgx and Pynput
 Includes human-like delays and anti-detection features
+
+FIXED: pyautogui replaced with pydirectinput_rgx for DirectInput
+       compatibility in 3D games (Roblox, etc.)
+FIXED: Async pynput ESC listener → os._exit(0) hard kill-switch.
 """
-import pyautogui
+import pydirectinput_rgx as pdi
 import pynput.keyboard
 import pynput.mouse
 import numpy as np
 import time
 import random
+import os
+import threading
 from typing import List, Tuple, Optional, Dict
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  GLOBAL ESC KILL-SWITCH
+#  Spawns a daemon thread that listens for the Escape key at all times.
+#  When pressed, os._exit(0) bypasses all cleanup and nukes the process.
+# ─────────────────────────────────────────────────────────────────────
+_kill_switch_active = False
+_kill_switch_lock = threading.Lock()
+
+
+def _start_esc_kill_switch():
+    """Start the global ESC kill-switch listener (idempotent)."""
+    global _kill_switch_active
+    with _kill_switch_lock:
+        if _kill_switch_active:
+            return
+        _kill_switch_active = True
+
+    def _on_press(key):
+        if key == pynput.keyboard.Key.esc:
+            print("\n\n🛑  ESC PRESSED — HARD KILLING PROCESS")
+            os._exit(0)
+
+    listener = pynput.keyboard.Listener(on_press=_on_press)
+    listener.daemon = True
+    listener.start()
+    print("🔑  ESC kill-switch armed (press ESC to terminate immediately)")
 
 
 class InputController:
@@ -32,7 +66,7 @@ class InputController:
         
         # Mouse settings
         self.sensitivity = self.config.get('actions', {}).get('mouse_sensitivity', 0.5)
-        self.screen_width, self.screen_height = pyautogui.size()
+        self.screen_width, self.screen_height = pdi.size()
         
         # Keyboard state
         self.pressed_keys = set()
@@ -41,8 +75,11 @@ class InputController:
         self.keyboard_listener = None
         self.mouse_listener = None
         
-        # Safety: Disable pyautogui failsafe (can be enabled for debugging)
-        pyautogui.FAILSAFE = False
+        # pydirectinput-rgx has no global failsafe toggle — that's fine,
+        # our ESC kill-switch replaces that safety net entirely.
+        
+        # Arm the ESC kill-switch on first InputController creation
+        _start_esc_kill_switch()
         
     def _apply_delay(self):
         """Apply human-like reaction delay"""
@@ -68,17 +105,17 @@ class InputController:
         """
         self._apply_delay()
         
-        # Normalize key name
+        # Normalize key name for pydirectinput-rgx
         key = key.upper()
         key_map = {
-            'SPACE': ' ',
+            'SPACE': 'space',
             'SHIFT': 'shift',
             'CTRL': 'ctrl',
-            'ALT': 'alt'
+            'ALT': 'alt',
         }
-        pyautogui_key = key_map.get(key, key.lower())
+        pdi_key = key_map.get(key, key.lower())
         
-        pyautogui.keyDown(pyautogui_key)
+        pdi.keyDown(pdi_key)
         self.pressed_keys.add(key)
         
         if duration:
@@ -94,15 +131,15 @@ class InputController:
         """
         key = key.upper()
         key_map = {
-            'SPACE': ' ',
+            'SPACE': 'space',
             'SHIFT': 'shift',
             'CTRL': 'ctrl',
-            'ALT': 'alt'
+            'ALT': 'alt',
         }
-        pyautogui_key = key_map.get(key, key.lower())
+        pdi_key = key_map.get(key, key.lower())
         
         try:
-            pyautogui.keyUp(pyautogui_key)
+            pdi.keyUp(pdi_key)
             self.pressed_keys.discard(key)
         except:
             pass  # Key might not be pressed
@@ -134,7 +171,7 @@ class InputController:
         Args:
             dx: Horizontal movement (-1 to 1 normalized)
             dy: Vertical movement (-1 to 1 normalized)
-            duration: Movement duration in seconds
+            duration: Movement duration in seconds (ignored by pdi, kept for API compat)
         """
         self._apply_delay()
         
@@ -146,12 +183,11 @@ class InputController:
         pixel_dx = dx * self.screen_width * 0.01  # 1% of screen width per unit
         pixel_dy = dy * self.screen_height * 0.01
         
-        # Move mouse
-        pyautogui.moveRel(
+        # pydirectinput-rgx moveRel — no tween support, raw DirectInput
+        pdi.moveRel(
             int(pixel_dx), 
             int(pixel_dy), 
-            duration=duration,
-            tween=pyautogui.easeInOutQuad  # Smooth acceleration/deceleration
+            relative=True,
         )
     
     def move_mouse_absolute(self, x: float, y: float, 
@@ -162,7 +198,7 @@ class InputController:
         Args:
             x: X position (0-1 normalized)
             y: Y position (0-1 normalized)
-            duration: Movement duration in seconds
+            duration: Movement duration in seconds (ignored by pdi, kept for API compat)
         """
         self._apply_delay()
         
@@ -178,12 +214,7 @@ class InputController:
         pixel_x = int(x * self.screen_width)
         pixel_y = int(y * self.screen_height)
         
-        pyautogui.moveTo(
-            pixel_x, 
-            pixel_y, 
-            duration=duration,
-            tween=pyautogui.easeInOutQuad
-        )
+        pdi.moveTo(pixel_x, pixel_y)
     
     def click(self, button: str = 'left', clicks: int = 1):
         """
@@ -196,7 +227,7 @@ class InputController:
         self._apply_delay()
         
         for _ in range(clicks):
-            pyautogui.click(button=button)
+            pdi.click(button=button)
             if clicks > 1:
                 time.sleep(0.1)  # Delay between multiple clicks
     
@@ -265,6 +296,7 @@ if __name__ == "__main__":
     print("Input Controller Test")
     print("=" * 50)
     print("Testing human-like input simulation...")
+    print("⚠️  ESC kill-switch is armed — press ESC to abort at any time.\n")
     
     controller = InputController()
     
@@ -273,9 +305,9 @@ if __name__ == "__main__":
         controller.press_key(key, duration=0.3)
     
     print("\nSimulating mouse movement...")
-    controller.move_mouse_relative(0.5, 0.0, duration=0.2)
+    controller.move_mouse_relative(0.5, 0.0)
     time.sleep(0.2)
-    controller.move_mouse_relative(-0.5, 0.0, duration=0.2)
+    controller.move_mouse_relative(-0.5, 0.0)
     
     print("\nSimulating click...")
     controller.click('left')

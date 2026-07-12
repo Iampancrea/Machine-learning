@@ -1,6 +1,9 @@
 """
 Screen capture module using MSS (fast screenshot library)
 Optimized for low-latency capture on integrated graphics
+
+FIXED: Uses mss.MSS() (non-deprecated) and captures a strict bounding box
+at the OS level instead of grabbing full-screen and resizing after.
 """
 import numpy as np
 import cv2
@@ -14,15 +17,17 @@ import time
 class ScreenCapture:
     """High-performance screen capture for Roblox gameplay"""
     
-    def __init__(self, resolution: Tuple[int, int] = (320, 180), 
+    def __init__(self, resolution: Tuple[int, int] = (800, 600), 
                  region: Optional[Tuple[int, int, int, int]] = None,
                  fps: int = 30):
         """
         Initialize screen capture
         
         Args:
-            resolution: Target resolution (width, height) - downscaled for speed
-            region: Screen region to capture (x, y, width, height) or None for full screen
+            resolution: Capture bounding box size (width, height) — grabbed
+                        directly at the OS level. No post-capture resize.
+            region: Explicit screen region (left, top, width, height).
+                    If None, an 800x600 box is centered on the primary monitor.
             fps: Target frames per second
         """
         self.target_resolution = resolution
@@ -30,23 +35,32 @@ class ScreenCapture:
         self.fps = fps
         self.frame_interval = 1.0 / fps
         
-        # Initialize MSS
-        self.sct = mss.mss()
+        # Initialize MSS — use the non-deprecated class constructor
+        self.sct = mss.MSS()
         
-        # Get monitor info
-        if region is None:
-            # Full screen - use primary monitor
-            self.monitor = self.sct.monitors[0]  # Full screen
-            print(f"Capturing full screen: {self.monitor}")
-        else:
-            # Custom region
+        # Build the capture bounding box
+        if region is not None:
+            # Explicit region supplied by caller
             self.monitor = {
                 "left": region[0],
                 "top": region[1],
                 "width": region[2],
-                "height": region[3]
+                "height": region[3],
             }
-            print(f"Capturing region: {self.monitor}")
+        else:
+            # Center an (width × height) box on the primary monitor
+            primary = self.sct.monitors[1]  # monitors[0] is "all", [1] is primary
+            cap_w, cap_h = self.target_resolution
+            center_x = primary["left"] + primary["width"] // 2
+            center_y = primary["top"] + primary["height"] // 2
+            self.monitor = {
+                "left": center_x - cap_w // 2,
+                "top": center_y - cap_h // 2,
+                "width": cap_w,
+                "height": cap_h,
+            }
+        
+        print(f"Capturing region: {self.monitor}")
         
         self.last_capture_time = 0
         self.frame_count = 0
@@ -68,7 +82,7 @@ class ScreenCapture:
         self.last_capture_time = time.time()
         self.frame_count += 1
         
-        # Capture screenshot
+        # Capture screenshot — already the exact bounding box, no resize needed
         screenshot = self.sct.grab(self.monitor)
         
         # Convert to numpy array (BGRA format)
@@ -79,14 +93,6 @@ class ScreenCapture:
         
         # Convert BGR to RGB
         img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-        
-        # Downscale to target resolution
-        if self.target_resolution:
-            img_rgb = cv2.resize(
-                img_rgb, 
-                self.target_resolution, 
-                interpolation=cv2.INTER_AREA  # Best quality for downscaling
-            )
         
         return img_rgb
     
@@ -125,10 +131,10 @@ class ScreenCapture:
         print(f"Captured {self.frame_count} frames in {elapsed:.2f}s")
         print(f"Average FPS: {avg_fps:.2f}")
         print(f"Frame shape: {frame.shape}")
-        print(f"Target resolution: {self.target_resolution}")
+        print(f"Bounding box: {self.monitor}")
 
 
 if __name__ == "__main__":
-    # Test the screen capture
-    capture = ScreenCapture(resolution=(320, 180))
+    # Test the screen capture with strict 800x600 bounding box
+    capture = ScreenCapture(resolution=(800, 600))
     capture.test_capture(duration=5.0)
