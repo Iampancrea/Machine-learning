@@ -104,8 +104,11 @@ def run_recording(args):
                 pass
         
         def on_click(x, y, button, pressed):
-            if pressed and button == pynput.mouse.Button.left:
-                action_logger.click('left')
+            if pressed:
+                if button == pynput.mouse.Button.left:
+                    action_logger.click('left')
+                elif button == pynput.mouse.Button.right:
+                    action_logger.click('right')
         
         def on_move(x, y):
             # Track relative movement via delta from last position

@@ -204,7 +204,8 @@ class ActionLogger:
         """Initialize action logger"""
         self.current_keys = set()
         self.mouse_delta = (0.0, 0.0)
-        self.mouse_click = False
+        self.click_left = False
+        self.click_right = False
         
     def press_key(self, key: str):
         """Record key press"""
@@ -220,7 +221,10 @@ class ActionLogger:
         
     def click(self, button: str = 'left'):
         """Record mouse click"""
-        self.mouse_click = True
+        if button == 'left':
+            self.click_left = True
+        elif button == 'right':
+            self.click_right = True
         
     def get_action(self) -> Dict:
         """Get current action state"""
@@ -228,12 +232,14 @@ class ActionLogger:
             'keys': list(self.current_keys),
             'mouse_dx': self.mouse_delta[0],
             'mouse_dy': self.mouse_delta[1],
-            'click': self.mouse_click
+            'click_left': self.click_left,
+            'click_right': self.click_right
         }
         
         # Reset transient states
         self.mouse_delta = (0.0, 0.0)
-        self.mouse_click = False
+        self.click_left = False
+        self.click_right = False
         
         return action
     
@@ -241,7 +247,8 @@ class ActionLogger:
         """Reset all action states"""
         self.current_keys.clear()
         self.mouse_delta = (0.0, 0.0)
-        self.mouse_click = False
+        self.click_left = False
+        self.click_right = False
 
 
 if __name__ == "__main__":

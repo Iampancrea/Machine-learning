@@ -107,29 +107,31 @@ class BotController:
             action_str = self.reverse_action_mapping[action_idx]
             parts = action_str.split('_')
             
-            if len(parts) >= 4:
+            if len(parts) >= 5:
                 keys = parts[0].split(',') if parts[0] else []
-                click = parts[1] == '1'
-                mouse_dx = int(parts[2])
-                mouse_dy = int(parts[3])
+                click_left = parts[1] == '1'
+                click_right = parts[2] == '1'
+                mouse_dx = int(parts[3])
+                mouse_dy = int(parts[4])
                 
                 return {
                     'keys': keys,
                     'mouse_dx': mouse_dx * 0.5,
                     'mouse_dy': mouse_dy * 0.5,
-                    'click': click
+                    'click_left': click_left,
+                    'click_right': click_right
                 }
         
         # Default fallback
         action_map = {
-            0: {'keys': [], 'mouse_dx': 0, 'mouse_dy': 0, 'click': False},
-            1: {'keys': ['W'], 'mouse_dx': 0, 'mouse_dy': 0, 'click': False},
-            2: {'keys': ['A'], 'mouse_dx': 0, 'mouse_dy': 0, 'click': False},
-            3: {'keys': ['S'], 'mouse_dx': 0, 'mouse_dy': 0, 'click': False},
-            4: {'keys': ['D'], 'mouse_dx': 0, 'mouse_dy': 0, 'click': False},
-            5: {'keys': ['W', 'A'], 'mouse_dx': 0, 'mouse_dy': 0, 'click': False},
-            6: {'keys': ['W', 'D'], 'mouse_dx': 0, 'mouse_dy': 0, 'click': False},
-            7: {'keys': [], 'mouse_dx': 0, 'mouse_dy': 0, 'click': True},
+            0: {'keys': [], 'mouse_dx': 0, 'mouse_dy': 0, 'click_left': False, 'click_right': False},
+            1: {'keys': ['W'], 'mouse_dx': 0, 'mouse_dy': 0, 'click_left': False, 'click_right': False},
+            2: {'keys': ['A'], 'mouse_dx': 0, 'mouse_dy': 0, 'click_left': False, 'click_right': False},
+            3: {'keys': ['S'], 'mouse_dx': 0, 'mouse_dy': 0, 'click_left': False, 'click_right': False},
+            4: {'keys': ['D'], 'mouse_dx': 0, 'mouse_dy': 0, 'click_left': False, 'click_right': False},
+            5: {'keys': ['W', 'A'], 'mouse_dx': 0, 'mouse_dy': 0, 'click_left': False, 'click_right': False},
+            6: {'keys': ['W', 'D'], 'mouse_dx': 0, 'mouse_dy': 0, 'click_left': False, 'click_right': False},
+            7: {'keys': [], 'mouse_dx': 0, 'mouse_dy': 0, 'click_left': True, 'click_right': False},
         }
         
         return action_map.get(action_idx % 8, action_map[0])

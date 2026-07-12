@@ -85,15 +85,16 @@ class GameplayDataset(Dataset):
                 
                 # Convert action to string key
                 keys = sorted(action.get('keys', []))
-                click = 1 if action.get('click', False) else 0
+                click_left = 1 if action.get('click_left', action.get('click', False)) else 0
+                click_right = 1 if action.get('click_right', False) else 0
                 mouse_dx = 1 if action.get('mouse_dx', 0) > 0.1 else (-1 if action.get('mouse_dx', 0) < -0.1 else 0)
                 mouse_dy = 1 if action.get('mouse_dy', 0) > 0.1 else (-1 if action.get('mouse_dy', 0) < -0.1 else 0)
                 
-                action_key = f"{','.join(keys)}_{click}_{mouse_dx}_{mouse_dy}"
+                action_key = f"{','.join(keys)}_{click_left}_{click_right}_{mouse_dx}_{mouse_dy}"
                 all_actions.add(action_key)
                 parsed_actions.append(action_key)
             except:
-                parsed_actions.append("none_0_0_0")
+                parsed_actions.append("none_0_0_0_0")
         
         # Create mapping
         self.action_mapping = {a: i for i, a in enumerate(sorted(all_actions))}
