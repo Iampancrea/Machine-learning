@@ -3,9 +3,9 @@ torch>=2.0.0
 numpy>=1.24.0
 opencv-python>=4.8.0
 pillow>=10.0.0
-pydirectinput-rgx>=1.0.0
+pydirectinput-rgx==2.1.3
 pynput>=1.7.6
-mss>=9.0.0
+mss>=10.2.0
 
 # Data handling
 pandas>=2.0.0
@@ -16,7 +16,7 @@ pyyaml>=6.0
 
 # RL libraries (lightweight)
 gymnasium>=0.29.0
-stable-baselines3>=2.0.0
+stable-baselines3>=2.9.0
 
 # Utilities
 tqdm>=4.65.0

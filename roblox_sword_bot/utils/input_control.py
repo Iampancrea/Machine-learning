@@ -175,18 +175,17 @@ class InputController:
         """
         self._apply_delay()
         
-        # Apply sensitivity and jitter
-        dx = self._add_jitter(dx * self.sensitivity)
-        dy = self._add_jitter(dy * self.sensitivity)
-        
-        # Convert to pixels
-        pixel_dx = dx * self.screen_width * 0.01  # 1% of screen width per unit
-        pixel_dy = dy * self.screen_height * 0.01
+        if abs(dx) < 0.01 and abs(dy) < 0.01:
+            return
+            
+        # Denormalize (recorder divides by 800 and 600)
+        pixel_dx = int(dx * self.sensitivity * 800)
+        pixel_dy = int(dy * self.sensitivity * 600)
         
         # pydirectinput-rgx moveRel — no tween support, raw DirectInput
         pdi.moveRel(
-            int(pixel_dx), 
-            int(pixel_dy), 
+            pixel_dx, 
+            pixel_dy, 
             relative=True,
         )
     
