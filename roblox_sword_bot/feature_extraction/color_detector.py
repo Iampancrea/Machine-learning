@@ -68,6 +68,68 @@ class GameDetector:
         self.white_threshold: int = cfg.get("white_threshold", 200)
         self.text_confirm_ratio: float = cfg.get("text_confirm_ratio", 0.03)
 
+    # ── Player Health & Kill Log ─────────────────────────────────────
+    
+    def detect_player_health(self, frame: np.ndarray) -> float:
+        """
+        Check the player's own health bar at the top right of the screen.
+        Returns a value from 0.0 to 1.0 representing estimated health.
+        """
+        # Standard Roblox health bar ROI (approximate top right)
+        # Using a wide strip to catch it regardless of screen variations
+        h, w = frame.shape[:2]
+        roi = frame[10:40, int(w * 0.75):w - 10]
+        
+        # Convert to HSV
+        hsv = cv2.cvtColor(roi, cv2.COLOR_RGB2HSV)
+        
+        # Look for Green, Yellow, and Red pixels
+        green = cv2.inRange(hsv, self.green_lower, self.green_upper)
+        yellow = cv2.inRange(hsv, self.banner_yellow_lower, self.banner_yellow_upper)
+        red1 = cv2.inRange(hsv, self.red_lower1, self.red_upper1)
+        red2 = cv2.inRange(hsv, self.red_lower2, self.red_upper2)
+        
+        # Combine all health bar colors
+        health_mask = cv2.bitwise_or(green, yellow)
+        health_mask = cv2.bitwise_or(health_mask, red1)
+        health_mask = cv2.bitwise_or(health_mask, red2)
+        
+        # Calculate ratio of health pixels in the ROI
+        # Max expected pixels depends on ROI size, we normalize it
+        health_pixels = cv2.countNonZero(health_mask)
+        # Assume a full health bar occupies roughly 150x10 = 1500 pixels
+        health_ratio = min(1.0, health_pixels / 1500.0)
+        return health_ratio
+
+    def detect_kill_log(self, frame: np.ndarray) -> bool:
+        """
+        Detect the kill log message at the bottom of the screen.
+        Looks for the distinct red/yellow clock icon '⏰' in the bottom 100 pixels.
+        Returns True if a kill log is present.
+        """
+        h, w = frame.shape[:2]
+        roi = frame[h - 100:h, 0:w]
+        
+        # Convert to HSV
+        hsv = cv2.cvtColor(roi, cv2.COLOR_RGB2HSV)
+        
+        # The clock icon has very distinct pure red and yellow pixels packed tightly
+        red1 = cv2.inRange(hsv, self.red_lower1, self.red_upper1)
+        red2 = cv2.inRange(hsv, self.red_lower2, self.red_upper2)
+        red = cv2.bitwise_or(red1, red2)
+        yellow = cv2.inRange(hsv, self.banner_yellow_lower, self.banner_yellow_upper)
+        
+        # Dilate to connect the red and yellow parts of the clock
+        kernel = np.ones((3, 3), np.uint8)
+        red_dilated = cv2.dilate(red, kernel, iterations=1)
+        yellow_dilated = cv2.dilate(yellow, kernel, iterations=1)
+        
+        # Intersection: Where red and yellow are right next to each other
+        clock_mask = cv2.bitwise_and(red_dilated, yellow_dilated)
+        
+        # If we find a cluster of overlapping red/yellow, it's the clock icon
+        return cv2.countNonZero(clock_mask) > 5
+
     # ─────────────────────────────────────────────────────────────────
     # STEP 1 — find health bars
     # ─────────────────────────────────────────────────────────────────
