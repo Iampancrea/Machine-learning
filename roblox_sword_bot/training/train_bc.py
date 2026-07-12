@@ -112,8 +112,8 @@ class GameplayDataset(Dataset):
         # Structured features
         struct_feat = torch.FloatTensor(self.features[idx])
         
-        # CNN frame: add channel dimension (1, 60, 80)
-        cnn_frame = torch.FloatTensor(self.cnn_frames[idx]).unsqueeze(0)
+        # CNN frame: add channel dimension (1, 60, 80) and normalize to 0-1 float32
+        cnn_frame = torch.FloatTensor(self.cnn_frames[idx]).unsqueeze(0) / 255.0
         
         # Action label
         action = self.actions[idx]

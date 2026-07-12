@@ -132,24 +132,25 @@ def run_recording(args):
         
         import time
         start_time = time.time()
+        last_print_time = start_time
         
         while time.time() - start_time < args.duration:
-            elapsed = time.time() - start_time
+            current_time = time.time()
+            elapsed = current_time - start_time
             progress = (elapsed / args.duration) * 100
             
             # Get actual player inputs from pynput listeners
             action = action_logger.get_action()
             recorder.record_frame(action)
             
-            if int(elapsed) % 10 == 0:
+            if current_time - last_print_time >= 10.0:
                 stats = recorder.get_statistics()
                 print(f"\rProgress: {progress:.1f}% | Frames: {stats.get('total_frames', 0)} | "
                       f"FPS: {stats.get('avg_fps', 0):.1f} | "
                       f"Enemies: {stats.get('enemy_detection_rate', 0)*100:.0f}% | "
                       f"Safe: {stats.get('safe_zone_rate', 0)*100:.0f}%",
                       end='', flush=True)
-            
-            time.sleep(1/30)  # ~30 FPS
+                last_print_time = current_time
         
         # Cleanup listeners
         kb_listener.stop()

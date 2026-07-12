@@ -53,7 +53,7 @@ class FeatureEngineer:
         gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
         small = cv2.resize(gray, self.cnn_resolution, 
                           interpolation=cv2.INTER_AREA)
-        return (small.astype(np.float32) / 255.0)
+        return small  # Return raw uint8 array
     
     def extract_features(self, frame: np.ndarray,
                         enemies: List[dict],
@@ -121,7 +121,11 @@ class FeatureEngineer:
         
         # ─── Frame-level Features ───
         avg_brightness = np.mean(frame) / 255.0
-        color_variance = np.std(frame, axis=(0, 1)).mean() / 255.0
+        
+        # Build outputs first so we can use cnn_frame for fast variance calc
+        cnn_frame = self.prepare_cnn_frame(frame)
+        color_variance = np.std(cnn_frame) / 255.0
+        
         features.extend([avg_brightness, color_variance])  # 9-10
         
         # ─── Store base features in history ───
@@ -148,8 +152,6 @@ class FeatureEngineer:
         # Pad if somehow short (shouldn't happen, but safety)
         if len(structured) < total_dim:
             structured = np.pad(structured, (0, total_dim - len(structured)))
-        
-        cnn_frame = self.prepare_cnn_frame(frame)
         
         return structured, cnn_frame
     
