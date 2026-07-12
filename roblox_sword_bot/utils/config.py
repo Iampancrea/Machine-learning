@@ -59,6 +59,12 @@ class Config:
 
 def load_config(config_name: str = "default_config") -> Config:
     """Convenience function to load configuration"""
+    # Strip extension if present
+    if config_name.endswith('.yaml'):
+        config_name = config_name[:-5]
+    elif config_name.endswith('.yml'):
+        config_name = config_name[:-4]
+        
     config_path = Path(__file__).parent.parent / "configs" / f"{config_name}.yaml"
     return Config(str(config_path))
 
