@@ -72,19 +72,58 @@ Examples:
 
 
 def run_recording(args):
-    """Run data collection/recording"""
+    """Run data collection/recording with live input capture"""
     print("\n📹 Starting Data Recording...")
     print(f"Duration: {args.duration} seconds ({args.duration/60:.1f} minutes)")
     
     try:
         from data_collection.recorder import DataRecorder, ActionLogger
         from utils.config import load_config
+        from utils.input_control import _start_esc_kill_switch
+        import pynput.keyboard
+        import pynput.mouse
+        
+        # Arm ESC kill-switch
+        _start_esc_kill_switch()
         
         config = load_config(args.config.replace('configs/', ''))
         recorder = DataRecorder(config=config.config)
+        action_logger = ActionLogger()
+        
+        # Setup pynput listeners to capture actual inputs
+        def on_key_press(key):
+            try:
+                action_logger.press_key(key.char if hasattr(key, 'char') and key.char else str(key))
+            except AttributeError:
+                pass
+        
+        def on_key_release(key):
+            try:
+                action_logger.release_key(key.char if hasattr(key, 'char') and key.char else str(key))
+            except AttributeError:
+                pass
+        
+        def on_click(x, y, button, pressed):
+            if pressed and button == pynput.mouse.Button.left:
+                action_logger.click('left')
+        
+        def on_move(x, y):
+            # Track relative movement via delta from last position
+            if hasattr(on_move, 'last_x'):
+                dx = (x - on_move.last_x) / 800.0  # Normalize
+                dy = (y - on_move.last_y) / 600.0
+                action_logger.move_mouse(dx, dy)
+            on_move.last_x = x
+            on_move.last_y = y
+        
+        kb_listener = pynput.keyboard.Listener(on_press=on_key_press, on_release=on_key_release)
+        mouse_listener = pynput.mouse.Listener(on_click=on_click, on_move=on_move)
+        kb_listener.start()
+        mouse_listener.start()
         
         print("\n⚠️  IMPORTANT: Make sure Roblox is running and visible!")
-        print("Press Ctrl+C to stop recording early\n")
+        print("🔑  Press ESC to hard-kill at any time")
+        print("🎮  Your keyboard + mouse inputs are being recorded!\n")
         
         session_id = recorder.start_session()
         
@@ -95,17 +134,23 @@ def run_recording(args):
             elapsed = time.time() - start_time
             progress = (elapsed / args.duration) * 100
             
-            # Get dummy action (in real use, this would capture actual inputs)
-            action = {'keys': [], 'mouse_dx': 0, 'mouse_dy': 0, 'click': False}
-            
+            # Get actual player inputs from pynput listeners
+            action = action_logger.get_action()
             recorder.record_frame(action)
             
             if int(elapsed) % 10 == 0:
                 stats = recorder.get_statistics()
                 print(f"\rProgress: {progress:.1f}% | Frames: {stats.get('total_frames', 0)} | "
-                      f"FPS: {stats.get('avg_fps', 0):.1f}", end='', flush=True)
+                      f"FPS: {stats.get('avg_fps', 0):.1f} | "
+                      f"Enemies: {stats.get('enemy_detection_rate', 0)*100:.0f}% | "
+                      f"Safe: {stats.get('safe_zone_rate', 0)*100:.0f}%",
+                      end='', flush=True)
             
             time.sleep(1/30)  # ~30 FPS
+        
+        # Cleanup listeners
+        kb_listener.stop()
+        mouse_listener.stop()
         
         recorder.stop_session(save=True)
         
@@ -113,9 +158,14 @@ def run_recording(args):
         stats = recorder.get_statistics()
         print(f"Total frames: {stats.get('total_frames', 0)}")
         print(f"Enemy detection rate: {stats.get('enemy_detection_rate', 0)*100:.1f}%")
+        print(f"Safe zone rate: {stats.get('safe_zone_rate', 0)*100:.1f}%")
         
     except KeyboardInterrupt:
         print("\n\n⏹️  Recording interrupted by user")
+        if 'kb_listener' in locals():
+            kb_listener.stop()
+        if 'mouse_listener' in locals():
+            mouse_listener.stop()
         if 'recorder' in locals():
             recorder.stop_session(save=True)
     except Exception as e:

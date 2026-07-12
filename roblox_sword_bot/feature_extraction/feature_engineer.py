@@ -1,170 +1,210 @@
 """
-Feature engineering module - combines all extracted features into a single vector
-Reduces 1920x1080 pixels (~2M values) to ~20 meaningful features
+Feature engineering module - combines detector outputs + CNN frame preparation
+into a unified feature vector for the hybrid model.
+
+NO OCR. The 80x60 grayscale CNN branch handles spatial/UI awareness.
+Structured features come from GameDetector's geometric anchoring.
 """
 import numpy as np
+import cv2
 from typing import Dict, List, Tuple, Optional
 from collections import deque
 
 
 class FeatureEngineer:
-    """Extract and combine game state features for ML model input"""
+    """Extract and combine game state features for the hybrid ML model"""
     
-    def __init__(self, history_length: int = 10):
+    def __init__(self, history_length: int = 10,
+                 cnn_resolution: Tuple[int, int] = (80, 60)):
         """
         Initialize feature engineer
         
         Args:
             history_length: Number of past frames to include in features
+            cnn_resolution: (width, height) for CNN input frame
         """
         self.history_length = history_length
+        self.cnn_resolution = cnn_resolution  # (width, height)
         self.feature_history = deque(maxlen=history_length)
         
-        # Feature dimensions
-        self.num_features = self._calculate_feature_dim()
+        # Per-frame structured feature count (BEFORE history)
+        self._base_feature_count = 11
+        # Historical features tracked per past frame
+        self._hist_features_per_frame = 3
         
-    def _calculate_feature_dim(self) -> int:
-        """Calculate total feature vector size"""
-        # Per-frame features + historical features
-        base_features = 15  # enemy position, distance, health, etc.
-        return base_features + (self.history_length - 1) * 5  # Only track key features historically
-    
-    def extract_features(self, frame: np.ndarray, 
-                        enemy_box: Optional[Tuple[int, int, int, int]],
-                        game_state: Optional[Dict] = None) -> np.ndarray:
+    def get_structured_dim(self) -> int:
         """
-        Extract features from a single frame
+        Return total structured feature vector dimension.
+        This must match what the HybridNetwork expects as structured_dim.
+        """
+        return (self._base_feature_count + 
+                (self.history_length - 1) * self._hist_features_per_frame)
+    
+    def prepare_cnn_frame(self, frame: np.ndarray) -> np.ndarray:
+        """
+        Downscale RGB frame to 80x60 grayscale for CNN branch.
         
         Args:
-            frame: Current game frame (RGB)
-            enemy_box: Enemy bounding box (x, y, w, h) or None
-            game_state: Additional game state info (health, cooldown, etc.)
+            frame: Full-resolution RGB frame (e.g. 800x600x3)
             
         Returns:
-            Feature vector (1D numpy array)
+            Grayscale frame normalized to 0-1, shape (60, 80), dtype float32
+        """
+        gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+        small = cv2.resize(gray, self.cnn_resolution, 
+                          interpolation=cv2.INTER_AREA)
+        return (small.astype(np.float32) / 255.0)
+    
+    def extract_features(self, frame: np.ndarray,
+                        enemies: List[dict],
+                        in_safe_zone: bool,
+                        game_state: Optional[Dict] = None
+                        ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Extract structured features + CNN frame from a single game tick.
+        
+        Args:
+            frame: Current game frame (RGB, e.g. 800x600x3)
+            enemies: List of confirmed enemy dicts from GameDetector.detect_enemies()
+                     Each dict has: hp_bar, hp_pct, player_center, tag_center, text_confidence
+            in_safe_zone: Whether player is currently in the safe zone
+            game_state: Optional additional state (reserved for future use)
+            
+        Returns:
+            Tuple of (structured_features, cnn_frame)
+            - structured_features: 1D float32 numpy array
+            - cnn_frame: 2D float32 numpy array of shape (60, 80)
         """
         features = []
         
-        # Screen dimensions
         height, width = frame.shape[:2]
         screen_center = (width // 2, height // 2)
         
-        # === Enemy Features ===
-        if enemy_box is not None:
-            x, y, w, h = enemy_box
+        # ─── Enemy Features (nearest enemy) ───
+        if enemies:
+            # Find nearest enemy to screen center
+            nearest = min(enemies, key=lambda e:
+                np.sqrt((e['player_center'][0] - screen_center[0]) ** 2 +
+                        (e['player_center'][1] - screen_center[1]) ** 2))
             
-            # Enemy position relative to screen center
-            enemy_center_x = x + w // 2
-            enemy_center_y = y + h // 2
+            px, py = nearest['player_center']
             
-            # Normalized position (-1 to 1)
-            rel_x = (enemy_center_x - screen_center[0]) / (width // 2)
-            rel_y = (enemy_center_y - screen_center[1]) / (height // 2)
+            # Relative position normalized to (-1, 1)
+            rel_x = (px - screen_center[0]) / (width // 2)
+            rel_y = (py - screen_center[1]) / (height // 2)
+            distance = np.sqrt(rel_x ** 2 + rel_y ** 2)
+            angle = np.arctan2(rel_y, rel_x)
             
             features.extend([
-                rel_x,  # Enemy X offset
-                rel_y,  # Enemy Y offset
-                w / width,  # Enemy width (indicates distance)
-                h / height,  # Enemy height
-                w * h / (width * height),  # Enemy area ratio
-                np.sqrt(rel_x**2 + rel_y**2),  # Distance to enemy
-                np.arctan2(rel_y, rel_x),  # Angle to enemy
+                rel_x,                      # 0: nearest enemy X offset
+                rel_y,                      # 1: nearest enemy Y offset
+                distance,                   # 2: distance to nearest enemy
+                angle,                      # 3: angle to nearest enemy
+                nearest['hp_pct'],          # 4: nearest enemy HP (0-1)
+                float(len(enemies)),        # 5: total visible enemy count
             ])
             
-            # Enemy velocity (if we have history)
+            # Enemy velocity (frame-to-frame delta)
             if len(self.feature_history) > 0:
-                prev_features = self.feature_history[-1]
-                vel_x = rel_x - prev_features[0]
-                vel_y = rel_y - prev_features[1]
-                features.extend([vel_x, vel_y])  # Enemy velocity
+                prev = self.feature_history[-1]
+                vel_x = rel_x - prev[0]
+                vel_y = rel_y - prev[1]
+                features.extend([vel_x, vel_y])  # 6-7: velocity
             else:
                 features.extend([0.0, 0.0])
-                
         else:
-            # No enemy detected - use default values
-            features.extend([0.0] * 9)
+            # No enemies visible — zero out all 8 enemy features
+            features.extend([0.0] * 8)
         
-        # === Player Features (from game state or estimation) ===
-        if game_state is not None:
-            features.extend([
-                game_state.get('health', 1.0),  # Normalized health
-                game_state.get('cooldown', 0.0),  # Attack cooldown (0-1)
-                game_state.get('stamina', 1.0),  # Normalized stamina
-            ])
-        else:
-            features.extend([1.0, 0.0, 1.0])  # Defaults
+        # ─── Zone Features ───
+        features.append(1.0 if in_safe_zone else 0.0)  # 8: safe zone flag
         
-        # === Frame-level Features ===
-        # Average brightness (can indicate lighting conditions)
+        # ─── Frame-level Features ───
         avg_brightness = np.mean(frame) / 255.0
-        features.append(avg_brightness)
+        color_variance = np.std(frame, axis=(0, 1)).mean() / 255.0
+        features.extend([avg_brightness, color_variance])  # 9-10
         
-        # Color distribution (simplified)
-        color_std = np.std(frame, axis=(0, 1)).mean() / 255.0
-        features.append(color_std)
+        # ─── Store base features in history ───
+        base_features = np.array(features[:self._base_feature_count],
+                                 dtype=np.float32)
+        self.feature_history.append(base_features)
         
-        # Store features in history
-        self.feature_history.append(np.array(features))
-        
-        # Add historical features
-        if len(self.feature_history) > 1:
-            # Add simplified history (only key features)
-            for i in range(1, min(len(self.feature_history), self.history_length)):
-                hist_feat = self.feature_history[-(i+1)]
-                # Only add important historical features
+        # ─── Historical Features (past N-1 frames) ───
+        for i in range(1, self.history_length):
+            if i < len(self.feature_history):
+                hist = self.feature_history[-(i + 1)]
                 features.extend([
-                    hist_feat[0],  # Historical enemy X
-                    hist_feat[1],  # Historical enemy Y
-                    hist_feat[5],  # Historical distance
+                    hist[0],   # historical enemy X
+                    hist[1],   # historical enemy Y
+                    hist[2],   # historical distance
                 ])
+            else:
+                features.extend([0.0, 0.0, 0.0])
         
-        # Pad if history is short
-        while len(features) < self.num_features:
-            features.append(0.0)
+        # ─── Build outputs ───
+        total_dim = self.get_structured_dim()
+        structured = np.array(features[:total_dim], dtype=np.float32)
         
-        return np.array(features[:self.num_features], dtype=np.float32)
+        # Pad if somehow short (shouldn't happen, but safety)
+        if len(structured) < total_dim:
+            structured = np.pad(structured, (0, total_dim - len(structured)))
+        
+        cnn_frame = self.prepare_cnn_frame(frame)
+        
+        return structured, cnn_frame
     
     def reset(self):
         """Clear feature history"""
         self.feature_history.clear()
     
     def get_feature_names(self) -> List[str]:
-        """Get names of all features for debugging"""
+        """Get names of all structured features for debugging"""
         names = [
-            'enemy_rel_x', 'enemy_rel_y', 'enemy_width', 'enemy_height',
-            'enemy_area', 'enemy_distance', 'enemy_angle',
+            'enemy_rel_x', 'enemy_rel_y', 'enemy_distance', 'enemy_angle',
+            'enemy_hp_pct', 'enemy_count',
             'enemy_vel_x', 'enemy_vel_y',
-            'player_health', 'attack_cooldown', 'player_stamina',
-            'frame_brightness', 'color_variance'
+            'in_safe_zone',
+            'frame_brightness', 'color_variance',
         ]
         
-        # Add historical feature names
         for i in range(1, self.history_length):
             names.extend([
                 f'hist_{i}_enemy_x',
                 f'hist_{i}_enemy_y',
-                f'hist_{i}_distance'
+                f'hist_{i}_distance',
             ])
         
         return names
     
     def get_observation_space_shape(self) -> Tuple[int]:
-        """Return shape of observation space for RL"""
-        return (self.num_features,)
+        """Return shape of structured observation space for RL"""
+        return (self.get_structured_dim(),)
 
 
 if __name__ == "__main__":
     # Test feature extraction
     engineer = FeatureEngineer(history_length=5)
     
-    # Simulate a frame
-    frame = np.random.randint(0, 255, (180, 320, 3), dtype=np.uint8)
-    enemy_box = (100, 50, 40, 80)  # Example enemy box
-    game_state = {'health': 0.8, 'cooldown': 0.2, 'stamina': 0.9}
-    
-    features = engineer.extract_features(frame, enemy_box, game_state)
-    
-    print(f"Feature vector shape: {features.shape}")
-    print(f"Number of features: {engineer.num_features}")
+    print(f"Structured feature dim: {engineer.get_structured_dim()}")
+    print(f"CNN resolution: {engineer.cnn_resolution}")
     print(f"Feature names: {engineer.get_feature_names()}")
-    print(f"Sample features: {features[:10]}")
+    
+    # Simulate a frame with one enemy
+    frame = np.random.randint(0, 255, (600, 800, 3), dtype=np.uint8)
+    enemies = [{
+        'hp_bar': (350, 200, 60, 8),
+        'hp_pct': 0.75,
+        'player_center': (380, 258),
+        'tag_center': (380, 204),
+        'text_confidence': 0.12,
+    }]
+    
+    structured, cnn_frame = engineer.extract_features(
+        frame, enemies, in_safe_zone=False
+    )
+    
+    print(f"\nStructured features shape: {structured.shape}")
+    print(f"CNN frame shape: {cnn_frame.shape}")
+    print(f"CNN frame dtype: {cnn_frame.dtype}")
+    print(f"CNN frame range: [{cnn_frame.min():.3f}, {cnn_frame.max():.3f}]")
+    print(f"Sample structured: {structured[:6]}")

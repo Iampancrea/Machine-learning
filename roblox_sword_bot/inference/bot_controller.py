@@ -1,7 +1,10 @@
 """
-Bot Controller - Runs the trained model to play Roblox automatically
+Bot Controller - Runs the trained hybrid model to play Roblox automatically.
 
-FIXED: Async ESC kill-switch via pynput + os._exit(0).
+Uses GameDetector (geometric anchoring) for enemy detection, FeatureEngineer
+for structured features + CNN frame prep, and HybridNetwork for action prediction.
+
+ESC kill-switch armed via pynput + os._exit(0).
 """
 import torch
 import numpy as np
@@ -15,9 +18,9 @@ import pynput.keyboard
 
 from utils.config import load_config
 from feature_extraction.screen_processor import ScreenCapture
-from feature_extraction.color_detector import ColorDetector
+from feature_extraction.color_detector import GameDetector
 from feature_extraction.feature_engineer import FeatureEngineer
-from models.network import MLPNetwork
+from models.network import MLPNetwork, HybridNetwork, create_model
 from utils.input_control import InputController, _start_esc_kill_switch
 
 
@@ -37,27 +40,38 @@ class BotController:
         
         print(f"Loading model from: {model_path}")
         
-        # Load model
+        # Load model checkpoint
         checkpoint = torch.load(model_path, map_location=self.device)
-        self.model_state = checkpoint['model_state_dict']
         self.num_actions = checkpoint['num_actions']
         self.action_mapping = checkpoint.get('action_mapping', None)
+        model_type = checkpoint.get('model_type', 'mlp')
         
-        # Initialize model architecture
-        # Note: We need to know input_dim from somewhere - using config estimate
-        feature_history = self.config.get('features', {}).get('feature_history_length', 10)
-        input_dim = feature_history * 15  # Approximate
+        # Initialize model architecture based on checkpoint type
+        if model_type == 'hybrid':
+            structured_dim = checkpoint.get('structured_dim', 38)
+            self.model = HybridNetwork(
+                structured_dim=structured_dim,
+                cnn_output_dim=self.config.get('model', {}).get('cnn_output_dim', 32),
+                hidden_layers=self.config.get('model', {}).get('hidden_layers', [128, 64]),
+                output_dim=self.num_actions,
+                dropout=0.0  # No dropout at inference
+            ).to(self.device)
+            self.is_hybrid = True
+        else:
+            feature_history = self.config.get('features', {}).get('feature_history_length', 10)
+            input_dim = checkpoint.get('structured_dim', feature_history * 15)
+            self.model = MLPNetwork(
+                input_dim=input_dim,
+                hidden_layers=self.config.get('model', {}).get('hidden_layers', [256, 128, 64]),
+                output_dim=self.num_actions
+            ).to(self.device)
+            self.is_hybrid = False
         
-        self.model = MLPNetwork(
-            input_dim=input_dim,
-            hidden_layers=self.config.get('model', {}).get('hidden_layers', [256, 128, 64]),
-            output_dim=self.num_actions
-        ).to(self.device)
-        
-        self.model.load_state_dict(self.model_state)
+        self.model.load_state_dict(checkpoint['model_state_dict'])
         self.model.eval()
         
-        print(f"Model loaded successfully ({self.model.num_params:,} parameters)")
+        print(f"Model loaded successfully ({sum(p.numel() for p in self.model.parameters()):,} parameters)")
+        print(f"Model type: {'hybrid (structured + CNN)' if self.is_hybrid else 'MLP only'}")
         
         # Initialize components
         self.screen_capture = ScreenCapture(
@@ -65,24 +79,16 @@ class BotController:
             fps=self.config.get('capture', {}).get('fps', 30)
         )
         
-        default_colors = [
-            (0, 107, 167),    # Bright blue
-            (205, 0, 0),      # Bright red
-            (255, 255, 0),    # Yellow
-            (0, 255, 0),      # Green
-        ]
-        self.color_detector = ColorDetector(
-            target_colors=default_colors,
-            tolerance=self.config.get('features', {}).get('color_tolerance', 30)
-        )
+        self.game_detector = GameDetector(config=self.config)
         
         self.feature_engineer = FeatureEngineer(
-            history_length=self.config.get('features', {}).get('feature_history_length', 10)
+            history_length=self.config.get('features', {}).get('feature_history_length', 10),
+            cnn_resolution=tuple(self.config.get('features', {}).get('cnn_resolution', [80, 60]))
         )
         
         self.input_controller = InputController(config=self.config)
         
-        # Action decoding (will be populated if available in checkpoint)
+        # Action decoding
         self.reverse_action_mapping = {}
         if self.action_mapping:
             self.reverse_action_mapping = {v: k for k, v in self.action_mapping.items()}
@@ -97,7 +103,6 @@ class BotController:
     def _decode_action(self, action_idx: int) -> Dict:
         """Convert action index to keyboard/mouse commands"""
         
-        # If we have reverse mapping, use it
         if self.reverse_action_mapping and action_idx in self.reverse_action_mapping:
             action_str = self.reverse_action_mapping[action_idx]
             parts = action_str.split('_')
@@ -110,12 +115,12 @@ class BotController:
                 
                 return {
                     'keys': keys,
-                    'mouse_dx': mouse_dx * 0.5,  # Scale down
+                    'mouse_dx': mouse_dx * 0.5,
                     'mouse_dy': mouse_dy * 0.5,
                     'click': click
                 }
         
-        # Default fallback - map action indices to simple actions
+        # Default fallback
         action_map = {
             0: {'keys': [], 'mouse_dx': 0, 'mouse_dy': 0, 'click': False},
             1: {'keys': ['W'], 'mouse_dx': 0, 'mouse_dy': 0, 'click': False},
@@ -129,37 +134,37 @@ class BotController:
         
         return action_map.get(action_idx % 8, action_map[0])
     
-    def predict_action(self, features: np.ndarray) -> tuple:
+    def predict_action(self, structured_features: np.ndarray,
+                      cnn_frame: np.ndarray) -> tuple:
         """
         Predict action from features
         
         Args:
-            features: Feature vector
+            structured_features: 1D feature vector from FeatureEngineer
+            cnn_frame: 2D grayscale frame (60, 80) from FeatureEngineer
             
         Returns:
             Tuple of (action_dict, confidence)
         """
         with torch.no_grad():
-            # Convert to tensor
-            features_tensor = torch.FloatTensor(features).unsqueeze(0).to(self.device)
+            struct_tensor = torch.FloatTensor(structured_features).unsqueeze(0).to(self.device)
             
-            # Get model output
-            outputs = self.model(features_tensor)
+            if self.is_hybrid:
+                # CNN frame: add batch and channel dims → (1, 1, 60, 80)
+                cnn_tensor = torch.FloatTensor(cnn_frame).unsqueeze(0).unsqueeze(0).to(self.device)
+                outputs = self.model(struct_tensor, cnn_tensor)
+            else:
+                outputs = self.model(struct_tensor)
+            
             probs = torch.softmax(outputs, dim=1)
-            
-            # Get best action
             confidence, predicted = torch.max(probs, 1)
             action_idx = predicted.item()
             conf = confidence.item()
             
-            # Apply confidence threshold
             if conf < self.confidence_threshold:
-                # Return no-op action if confidence too low
                 return {'keys': [], 'mouse_dx': 0, 'mouse_dy': 0, 'click': False}, conf
             
-            # Decode action
             action = self._decode_action(action_idx)
-            
             return action, conf
     
     def run(self):
@@ -167,7 +172,6 @@ class BotController:
         print("\n🤖 Bot starting...")
         print("Press ESC to hard-kill the process at any time\n")
         
-        # Arm the ESC kill-switch (idempotent — safe to call again)
         _start_esc_kill_switch()
         
         self.running = True
@@ -181,21 +185,23 @@ class BotController:
                 # Capture frame
                 frame = self.screen_capture.capture()
                 
-                # Detect enemies
-                enemy_box = self.color_detector.get_nearest_enemy(frame)
+                # Detect enemies (geometric anchoring)
+                enemies = self.game_detector.detect_enemies(frame)
+                in_safe_zone = self.game_detector.detect_safe_zone(frame)
                 
-                # Extract features
-                features = self.feature_engineer.extract_features(
+                # Extract features (structured + CNN frame)
+                structured_features, cnn_frame = self.feature_engineer.extract_features(
                     frame=frame,
-                    enemy_box=enemy_box,
+                    enemies=enemies,
+                    in_safe_zone=in_safe_zone,
                     game_state=None
                 )
                 
                 # Predict action
-                action, confidence = self.predict_action(features)
+                action, confidence = self.predict_action(structured_features, cnn_frame)
                 
-                # Execute action
-                if confidence >= self.confidence_threshold:
+                # Execute action (skip if in safe zone for safety)
+                if confidence >= self.confidence_threshold and not in_safe_zone:
                     self.input_controller.execute_action(action)
                 
                 # Update statistics
@@ -204,8 +210,10 @@ class BotController:
                 
                 if frame_count % 30 == 0:
                     fps = frame_count / max(elapsed, 0.001)
-                    status = "AIMING" if enemy_box else "SEARCHING"
-                    print(f"\r[{status}] FPS: {fps:.1f} | Conf: {confidence:.3f}", end='', flush=True)
+                    status = "SAFE" if in_safe_zone else ("AIMING" if enemies else "SEARCHING")
+                    enemy_str = f"👥{len(enemies)}" if enemies else "👥0"
+                    print(f"\r[{status}] {enemy_str} | FPS: {fps:.1f} | Conf: {confidence:.3f}",
+                          end='', flush=True)
                 
                 # Frame rate limiting
                 frame_time = 1.0 / self.fps_limit
@@ -217,7 +225,6 @@ class BotController:
             print("\n\n⏹️  Stopping bot...")
             self.running = False
         finally:
-            # Cleanup
             self.input_controller.reset()
             total_time = time.time() - start_time
             avg_fps = frame_count / max(total_time, 0.001)
@@ -231,7 +238,7 @@ class BotController:
 if __name__ == "__main__":
     print("Bot Controller Test")
     print("=" * 50)
-    print("This module runs the trained bot.")
+    print("This module runs the trained hybrid bot.")
     print("\nTo use:")
     print("1. Train a model first: python main.py train_bc")
     print("2. Run the bot: python main.py run --model checkpoints/best_model.pth")

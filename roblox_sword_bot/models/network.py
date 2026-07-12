@@ -230,8 +230,155 @@ def create_model(model_type: str, input_dim: int, output_dim: int,
             dropout=config.get('dropout', 0.1)
         )
     
+    elif model_type == 'hybrid':
+        return HybridNetwork(
+            structured_dim=input_dim,
+            cnn_output_dim=config.get('cnn_output_dim', 32),
+            hidden_layers=config.get('hidden_layers', [128, 64]),
+            output_dim=output_dim,
+            dropout=config.get('dropout', 0.1)
+        )
+    
     else:
         raise ValueError(f"Unknown model type: {model_type}")
+
+
+class SpatialCNN(nn.Module):
+    """
+    Tiny CNN for spatial/UI awareness from 80x60 grayscale frames.
+    Stays under 100K parameters — built to purr on Intel Iris Xe.
+    """
+
+    def __init__(self, output_dim: int = 32):
+        """
+        Initialize SpatialCNN
+
+        Args:
+            output_dim: Dimensionality of the spatial feature vector
+        """
+        super(SpatialCNN, self).__init__()
+
+        self.output_dim = output_dim
+
+        # Conv stack: 1×60×80 → 16×30×40 → 32×15×20 → 32×8×10 → pool to 32×4×5
+        self.conv_stack = nn.Sequential(
+            nn.Conv2d(1, 16, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(16),
+            nn.ReLU(),
+            nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            nn.Conv2d(32, 32, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            nn.AdaptiveAvgPool2d((4, 5)),  # Force to 32×4×5 = 640 flat
+        )
+
+        # Projection to compact spatial embedding
+        self.fc = nn.Linear(640, output_dim)
+
+        self.num_params = sum(p.numel() for p in self.parameters())
+        print(f"SpatialCNN initialized with {self.num_params:,} parameters")
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass
+
+        Args:
+            x: Grayscale frame tensor of shape (batch_size, 1, 60, 80)
+
+        Returns:
+            Spatial feature vector of shape (batch_size, output_dim)
+        """
+        x = self.conv_stack(x)
+        x = x.flatten(start_dim=1)  # (batch, 640)
+        x = self.fc(x)
+        return x
+
+
+class HybridNetwork(nn.Module):
+    """
+    Combines structured features (GameDetector/FeatureEngineer outputs)
+    with spatial features (SpatialCNN on raw frames).
+    Two streams, one brain — the spicy fusion model.
+    """
+
+    def __init__(self, structured_dim: int,
+                 cnn_output_dim: int = 32,
+                 hidden_layers: List[int] = [128, 64],
+                 output_dim: int = 8,
+                 dropout: float = 0.1):
+        """
+        Initialize HybridNetwork
+
+        Args:
+            structured_dim: Dimensionality of structured feature vector
+            cnn_output_dim: Output dim of the SpatialCNN branch
+            hidden_layers: Hidden layer sizes for the fusion MLP head
+            output_dim: Number of output actions
+            dropout: Dropout probability
+        """
+        super(HybridNetwork, self).__init__()
+
+        self.structured_dim = structured_dim
+        self.output_dim = output_dim
+
+        # Spatial feature extractor
+        self.cnn = SpatialCNN(output_dim=cnn_output_dim)
+
+        # Fusion MLP — built fresh to avoid double-printing from MLPNetwork
+        combined_dim = structured_dim + cnn_output_dim
+        mlp_layers = []
+        prev_dim = combined_dim
+        for h_dim in hidden_layers:
+            mlp_layers.append(nn.Linear(prev_dim, h_dim))
+            mlp_layers.append(nn.ReLU())
+            mlp_layers.append(nn.Dropout(dropout))
+            prev_dim = h_dim
+        mlp_layers.append(nn.Linear(prev_dim, output_dim))
+        self.mlp_head = nn.Sequential(*mlp_layers)
+
+        self.num_params = sum(p.numel() for p in self.parameters())
+        print(f"HybridNetwork initialized with {self.num_params:,} total parameters")
+
+    def forward(self, structured_features: torch.Tensor,
+                cnn_frames: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass — fuse structured + spatial streams
+
+        Args:
+            structured_features: (batch_size, structured_dim)
+            cnn_frames: (batch_size, 1, 60, 80) grayscale frames
+
+        Returns:
+            Action logits of shape (batch_size, output_dim)
+        """
+        cnn_out = self.cnn(cnn_frames)
+        combined = torch.cat([structured_features, cnn_out], dim=1)
+        return self.mlp_head(combined)
+
+    def get_action(self, structured_features: torch.Tensor,
+                   cnn_frames: torch.Tensor,
+                   deterministic: bool = False) -> torch.Tensor:
+        """
+        Get action from dual-stream input
+
+        Args:
+            structured_features: Structured state features
+            cnn_frames: Raw grayscale frames
+            deterministic: If True, use argmax; otherwise sample
+
+        Returns:
+            Action tensor
+        """
+        with torch.no_grad():
+            logits = self.forward(structured_features, cnn_frames)
+
+            if deterministic:
+                return torch.argmax(logits, dim=-1)
+            else:
+                probs = F.softmax(logits, dim=-1)
+                return torch.multinomial(probs, 1).squeeze(-1)
 
 
 if __name__ == "__main__":
@@ -257,3 +404,18 @@ if __name__ == "__main__":
     action, log_prob, val = ac.get_action(dummy_input)
     print(f"Action shape: {action.shape}")
     print(f"Log prob shape: {log_prob.shape}")
+
+    print("\nTesting SpatialCNN...")
+    cnn = SpatialCNN(output_dim=32)
+    cnn_input = torch.randn(4, 1, 60, 80)
+    cnn_output = cnn(cnn_input)
+    print(f"CNN Input: {cnn_input.shape}, Output: {cnn_output.shape}")
+
+    print("\nTesting HybridNetwork...")
+    hybrid = HybridNetwork(structured_dim=20, output_dim=8)
+    struct_input = torch.randn(4, 20)
+    frame_input = torch.randn(4, 1, 60, 80)
+    hybrid_output = hybrid(struct_input, frame_input)
+    print(f"Hybrid Output: {hybrid_output.shape}")
+    action = hybrid.get_action(struct_input, frame_input)
+    print(f"Action: {action.shape}")

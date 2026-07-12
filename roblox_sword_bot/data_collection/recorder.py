@@ -1,5 +1,11 @@
 """
-Data collection module - records gameplay and saves state-action pairs
+Data collection module - records gameplay and saves state-action pairs.
+
+UPDATED: Now saves raw 80x60 grayscale CNN frames alongside structured
+features in the .npz files. This is essential for training the CNN branch
+of the hybrid model on cloud GPUs (Kaggle, SageMaker, Lightning AI).
+
+Uses GameDetector for geometric-anchored enemy detection and safe zone ROI.
 """
 import numpy as np
 import cv2
@@ -11,7 +17,7 @@ from typing import Dict, List, Tuple, Optional
 import pickle
 
 from feature_extraction.screen_processor import ScreenCapture
-from feature_extraction.color_detector import ColorDetector
+from feature_extraction.color_detector import GameDetector
 from feature_extraction.feature_engineer import FeatureEngineer
 
 
@@ -32,26 +38,19 @@ class DataRecorder:
         
         self.config = config or {}
         
-        # Initialize components
+        # Initialize screen capture
         self.screen_capture = ScreenCapture(
             resolution=tuple(self.config.get('capture', {}).get('resolution', [800, 600])),
             fps=self.config.get('capture', {}).get('fps', 30)
         )
         
-        # Initialize color detector with default Roblox colors
-        default_colors = [
-            (0, 107, 167),    # Bright blue
-            (205, 0, 0),      # Bright red
-            (255, 255, 0),    # Yellow
-            (0, 255, 0),      # Green
-        ]
-        self.color_detector = ColorDetector(
-            target_colors=default_colors,
-            tolerance=self.config.get('features', {}).get('color_tolerance', 30)
-        )
+        # Initialize game-specific detector (geometric anchoring)
+        self.game_detector = GameDetector(config=self.config)
         
+        # Initialize feature engineer (structured features + CNN frame prep)
         self.feature_engineer = FeatureEngineer(
-            history_length=self.config.get('features', {}).get('feature_history_length', 10)
+            history_length=self.config.get('features', {}).get('feature_history_length', 10),
+            cnn_resolution=tuple(self.config.get('features', {}).get('cnn_resolution', [80, 60]))
         )
         
         # Recording state
@@ -80,11 +79,14 @@ class DataRecorder:
     
     def record_frame(self, action: Dict) -> Dict:
         """
-        Record a single frame with associated action
+        Record a single frame with associated action.
+        
+        Captures the screen, runs GameDetector for enemy detection + safe zone,
+        extracts structured features AND the 80x60 grayscale CNN frame.
         
         Args:
             action: Dictionary containing keyboard/mouse actions
-                   e.g., {'keys': ['W', 'A'], 'mouse_x': 0.5, 'mouse_y': -0.2, 'click': False}
+                   e.g., {'keys': ['W', 'A'], 'mouse_dx': 0.5, 'mouse_dy': -0.2, 'click': False}
                    
         Returns:
             Recorded data dictionary
@@ -95,24 +97,28 @@ class DataRecorder:
         # Capture frame
         frame = self.screen_capture.capture()
         
-        # Detect enemies
-        enemy_box = self.color_detector.get_nearest_enemy(frame)
+        # Run game-specific detection (geometric anchoring)
+        enemies = self.game_detector.detect_enemies(frame)
+        in_safe_zone = self.game_detector.detect_safe_zone(frame)
         
-        # Extract features
-        features = self.feature_engineer.extract_features(
+        # Extract structured features + CNN frame
+        structured_features, cnn_frame = self.feature_engineer.extract_features(
             frame=frame,
-            enemy_box=enemy_box,
-            game_state=None  # Can be extended to read from game
+            enemies=enemies,
+            in_safe_zone=in_safe_zone,
+            game_state=None
         )
         
         # Create recording entry
         timestamp = time.time()
         record = {
             'timestamp': timestamp,
-            'features': features,
+            'features': structured_features,     # 1D float32 array
+            'cnn_frame': cnn_frame,              # 2D float32 (60, 80) — for CNN training
             'action': action,
-            'enemy_detected': enemy_box is not None,
-            'enemy_box': enemy_box,
+            'enemy_detected': len(enemies) > 0,
+            'enemy_count': len(enemies),
+            'in_safe_zone': in_safe_zone,
         }
         
         self.session_data.append(record)
@@ -139,23 +145,35 @@ class DataRecorder:
         
         # Convert to numpy arrays
         features_list = [r['features'] for r in self.session_data]
+        cnn_frames_list = [r['cnn_frame'] for r in self.session_data]
         timestamps = np.array([r['timestamp'] for r in self.session_data])
         enemy_detected = np.array([r['enemy_detected'] for r in self.session_data])
+        enemy_counts = np.array([r['enemy_count'] for r in self.session_data])
+        in_safe_zone = np.array([r['in_safe_zone'] for r in self.session_data])
         
-        # Save actions as JSON-serializable format
+        # Save actions as JSON strings
         actions_json = [json.dumps(r['action']) for r in self.session_data]
         
         np.savez_compressed(
             save_path,
-            features=np.array(features_list),
-            timestamps=timestamps,
-            enemy_detected=enemy_detected,
-            actions=np.array(actions_json, dtype=object)
+            features=np.array(features_list),           # (N, structured_dim)
+            cnn_frames=np.array(cnn_frames_list),        # (N, 60, 80) — CNN training data
+            timestamps=timestamps,                       # (N,)
+            enemy_detected=enemy_detected,               # (N,) bool
+            enemy_counts=enemy_counts,                   # (N,) int
+            in_safe_zone=in_safe_zone,                   # (N,) bool
+            actions=np.array(actions_json, dtype=object)  # (N,) JSON strings
         )
         
-        print(f"Session saved to: {save_path}")
+        print(f"\nSession saved to: {save_path}")
         print(f"Total frames: {len(self.session_data)}")
         print(f"Duration: {timestamps[-1] - timestamps[0]:.2f}s")
+        
+        # Size report
+        file_size_mb = save_path.stat().st_size / (1024 * 1024)
+        print(f"File size: {file_size_mb:.1f} MB")
+        print(f"  ├─ features: {np.array(features_list).nbytes / 1024:.1f} KB")
+        print(f"  └─ cnn_frames: {np.array(cnn_frames_list).nbytes / (1024*1024):.1f} MB")
         
         return str(save_path)
     
@@ -165,12 +183,15 @@ class DataRecorder:
             return {}
         
         enemy_count = sum(1 for r in self.session_data if r['enemy_detected'])
+        safe_count = sum(1 for r in self.session_data if r['in_safe_zone'])
         duration = self.session_data[-1]['timestamp'] - self.session_data[0]['timestamp']
         
         return {
             'total_frames': len(self.session_data),
             'frames_with_enemy': enemy_count,
             'enemy_detection_rate': enemy_count / len(self.session_data),
+            'frames_in_safe_zone': safe_count,
+            'safe_zone_rate': safe_count / len(self.session_data),
             'duration_seconds': duration,
             'avg_fps': len(self.session_data) / max(duration, 0.001)
         }
@@ -227,6 +248,8 @@ if __name__ == "__main__":
     print("Data Recorder Test")
     print("=" * 50)
     print("This module records gameplay for training data.")
+    print("\nNow saves BOTH structured features AND raw 80x60")
+    print("grayscale CNN frames in .npz files for cloud training.")
     print("\nTo use:")
     print("1. Configure your game colors in the constructor")
     print("2. Call start_session()")

@@ -1,194 +1,311 @@
 """
-Color-based detection for finding players and enemies in Roblox
-Optimized for CPU execution on integrated graphics
+GameDetector — HSV color segmentation + geometric anchoring for Roblox
+sword-fight bot detection.  No OCR, no template matching, just raw pixel
+math the way the silicon gods intended.
+
+Detection pipeline:
+    1. detect_health_bars  — find red/green HP bars via HSV masks + shape filter
+    2. confirm_enemies     — anchor each bar to a player by requiring white
+                             username text directly below it
+    3. detect_safe_zone    — check a static ROI for the red/yellow banner
+
+Frame assumptions:
+    • 800×600 RGB input (numpy uint8 array, channel order RGB)
+    • Health bars are thin horizontal rectangles floating above heads
+    • Usernames are white text rendered immediately below the bar
 """
+
 import numpy as np
 import cv2
-from typing import List, Tuple, Dict, Optional
+from typing import List, Tuple, Optional
 
 
-class ColorDetector:
-    """Detect players/enemies based on color signatures"""
-    
-    def __init__(self, target_colors: List[Tuple[int, int, int]], 
-                 tolerance: int = 30):
+class GameDetector:
+    """Detect enemies and game-state elements in a Roblox sword-fight
+    game using HSV color segmentation and geometric filtering."""
+
+    def __init__(self, config: dict = None):
         """
-        Initialize color detector
-        
         Args:
-            target_colors: List of RGB colors to detect [(R,G,B), ...]
-            tolerance: Color matching tolerance (0-255)
+            config: Optional dict to override any default thresholds.
+                    Unrecognised keys are silently ignored.
         """
-        self.target_colors = [np.array(color) for color in target_colors]
-        self.tolerance = tolerance
-        
-    def create_mask(self, frame: np.ndarray, color_idx: int = None) -> np.ndarray:
-        """
-        Create binary mask for target colors
-        
+        cfg = config or {}
+
+        # ── Health-bar HSV ranges ────────────────────────────────────
+        # Green portion of the bar
+        self.green_lower = np.array(cfg.get("green_lower", [35, 80, 80]))
+        self.green_upper = np.array(cfg.get("green_upper", [85, 255, 255]))
+
+        # Red wraps around the hue wheel → two ranges
+        self.red_lower1 = np.array(cfg.get("red_lower1", [0, 80, 80]))
+        self.red_upper1 = np.array(cfg.get("red_upper1", [10, 255, 255]))
+        self.red_lower2 = np.array(cfg.get("red_lower2", [170, 80, 80]))
+        self.red_upper2 = np.array(cfg.get("red_upper2", [180, 255, 255]))
+
+        # ── Geometric constraints for a valid health bar ─────────────
+        self.min_bar_width: int = cfg.get("min_bar_width", 20)
+        self.max_bar_width: int = cfg.get("max_bar_width", 150)
+        self.max_bar_height: int = cfg.get("max_bar_height", 12)
+        self.min_aspect_ratio: float = cfg.get("min_aspect_ratio", 3.0)
+
+        # ── Safe-zone banner ROI (relative to 800×600 frame) ────────
+        self.safe_zone_roi: Tuple[int, int, int, int] = tuple(
+            cfg.get("safe_zone_roi", (150, 5, 500, 45))
+        )  # (x, y, w, h)
+
+        # Banner HSV — red component
+        self.banner_red_lower1 = np.array(cfg.get("banner_red_lower1", [0, 120, 150]))
+        self.banner_red_upper1 = np.array(cfg.get("banner_red_upper1", [10, 255, 255]))
+        self.banner_red_lower2 = np.array(cfg.get("banner_red_lower2", [170, 120, 150]))
+        self.banner_red_upper2 = np.array(cfg.get("banner_red_upper2", [180, 255, 255]))
+
+        # Banner HSV — yellow component
+        self.banner_yellow_lower = np.array(cfg.get("banner_yellow_lower", [15, 120, 150]))
+        self.banner_yellow_upper = np.array(cfg.get("banner_yellow_upper", [35, 255, 255]))
+
+        # ── White-text confirmation thresholds ───────────────────────
+        self.white_threshold: int = cfg.get("white_threshold", 200)
+        self.text_confirm_ratio: float = cfg.get("text_confirm_ratio", 0.03)
+
+    # ─────────────────────────────────────────────────────────────────
+    # STEP 1 — find health bars
+    # ─────────────────────────────────────────────────────────────────
+    def detect_health_bars(self, frame: np.ndarray) -> List[dict]:
+        """Detect health-bar candidates via HSV masking + geometric filter.
+
         Args:
-            frame: Input RGB frame
-            color_idx: Specific color index or None for all colors
-            
+            frame: RGB uint8 image (H, W, 3).
+
         Returns:
-            Binary mask where detected colors are white
+            List of dicts, each with keys:
+                'bbox'   — (x, y, w, h)
+                'hp_pct' — float 0-1, estimated HP remaining
+                'center' — (cx, cy)
         """
-        # Convert RGB to BGR for OpenCV
-        if len(frame.shape) == 3 and frame.shape[2] == 3:
-            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-        else:
-            frame_bgr = frame
-        
-        # Convert to HSV for better color segmentation
-        hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
-        
-        masks = []
-        
-        colors_to_check = [color_idx] if color_idx is not None else range(len(self.target_colors))
-        
-        for idx in colors_to_check:
-            color_bgr = cv2.cvtColor(
-                np.uint8([[self.target_colors[idx]]]), 
-                cv2.COLOR_RGB2BGR
-            )[0][0]
-            
-            # Convert target color to HSV
-            color_hsv = cv2.cvtColor(
-                np.uint8([[color_bgr]]), 
-                cv2.COLOR_BGR2HSV
-            )[0][0]
-            
-            h, s, v = color_hsv
-            
-            # Define color range
-            lower_color = np.array([
-                max(0, h - self.tolerance // 4),
-                max(0, s - self.tolerance),
-                max(0, v - self.tolerance)
-            ])
-            
-            upper_color = np.array([
-                min(180, h + self.tolerance // 4),
-                min(255, s + self.tolerance),
-                min(255, v + self.tolerance)
-            ])
-            
-            # Create mask
-            mask = cv2.inRange(hsv, lower_color, upper_color)
-            masks.append(mask)
-        
-        # Combine all masks
-        if len(masks) > 1:
-            combined_mask = cv2.bitwise_or(masks[0], masks[1])
-            for mask in masks[2:]:
-                combined_mask = cv2.bitwise_or(combined_mask, mask)
-        else:
-            combined_mask = masks[0]
-        
-        # Morphological operations to remove noise
-        kernel = np.ones((3, 3), np.uint8)
-        combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_OPEN, kernel)
-        combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel)
-        
-        return combined_mask
-    
-    def find_contours(self, mask: np.ndarray, 
-                     min_area: int = 50) -> List[Tuple[int, int, int, int]]:
-        """
-        Find contours in mask and return bounding boxes
-        
-        Args:
-            mask: Binary mask from create_mask()
-            min_area: Minimum contour area to consider
-            
-        Returns:
-            List of bounding boxes (x, y, w, h)
-        """
+        hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
+
+        # Green mask
+        mask_green = cv2.inRange(hsv, self.green_lower, self.green_upper)
+
+        # Red mask (two hue ranges merged)
+        mask_red1 = cv2.inRange(hsv, self.red_lower1, self.red_upper1)
+        mask_red2 = cv2.inRange(hsv, self.red_lower2, self.red_upper2)
+        mask_red = cv2.bitwise_or(mask_red1, mask_red2)
+
+        # Combined health-bar mask
+        mask = cv2.bitwise_or(mask_green, mask_red)
+
+        # Morphology — horizontal kernel to bridge bar fragments, then
+        # a small open to nuke isolated noise.
+        kernel_close = cv2.getStructuringElement(cv2.MORPH_RECT, (6, 2))
+        kernel_open = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel_close)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel_open)
+
         contours, _ = cv2.findContours(
-            mask, 
-            cv2.RETR_EXTERNAL, 
-            cv2.CHAIN_APPROX_SIMPLE
+            mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
         )
-        
-        boxes = []
-        for contour in contours:
-            area = cv2.contourArea(contour)
-            if area >= min_area:
-                x, y, w, h = cv2.boundingRect(contour)
-                boxes.append((x, y, w, h))
-        
-        return boxes
-    
-    def detect_players(self, frame: np.ndarray) -> Dict[str, List[Tuple[int, int, int, int]]]:
-        """
-        Detect all players in frame
-        
+
+        bars: List[dict] = []
+        for cnt in contours:
+            x, y, w, h = cv2.boundingRect(cnt)
+
+            # Geometric gate
+            if h < 2:
+                continue
+            aspect = w / h
+            if (
+                aspect < self.min_aspect_ratio
+                or w < self.min_bar_width
+                or w > self.max_bar_width
+                or h > self.max_bar_height
+            ):
+                continue
+
+            # HP estimation: green pixels / total coloured pixels inside bbox
+            roi_hsv = hsv[y : y + h, x : x + w]
+            green_in_roi = cv2.inRange(roi_hsv, self.green_lower, self.green_upper)
+            red1_in_roi = cv2.inRange(roi_hsv, self.red_lower1, self.red_upper1)
+            red2_in_roi = cv2.inRange(roi_hsv, self.red_lower2, self.red_upper2)
+            red_in_roi = cv2.bitwise_or(red1_in_roi, red2_in_roi)
+
+            green_count = int(np.count_nonzero(green_in_roi))
+            red_count = int(np.count_nonzero(red_in_roi))
+            total = green_count + red_count
+            hp_pct = green_count / total if total > 0 else 0.0
+
+            cx = x + w // 2
+            cy = y + h // 2
+
+            bars.append({
+                "bbox": (x, y, w, h),
+                "hp_pct": hp_pct,
+                "center": (cx, cy),
+            })
+
+        return bars
+
+    # ─────────────────────────────────────────────────────────────────
+    # STEP 2 — confirm enemies (white-text anchor)
+    # ─────────────────────────────────────────────────────────────────
+    def confirm_enemies(
+        self, frame: np.ndarray, health_bars: List[dict]
+    ) -> List[dict]:
+        """Filter health-bar candidates by checking for white username text
+        immediately below each bar.
+
         Args:
-            frame: Input RGB frame
-            
+            frame:       RGB uint8 image.
+            health_bars: Output of :meth:`detect_health_bars`.
+
         Returns:
-            Dictionary with color indices as keys and list of bounding boxes as values
+            List of confirmed enemy dicts:
+                'hp_bar'          — (x, y, w, h)
+                'hp_pct'          — float 0-1
+                'player_center'   — (px, py), estimated body centre
+                'tag_center'      — (tx, ty), health-bar centre
+                'text_confidence' — float, white-pixel ratio in text ROI
         """
-        results = {}
-        
-        for idx, color in enumerate(self.target_colors):
-            mask = self.create_mask(frame, idx)
-            boxes = self.find_contours(mask)
-            results[f"color_{idx}"] = boxes
-        
-        return results
-    
-    def get_nearest_enemy(self, frame: np.ndarray, 
-                         screen_center: Tuple[int, int] = None) -> Optional[Tuple[int, int, int, int]]:
-        """
-        Find the nearest enemy to screen center
-        
+        frame_h, frame_w = frame.shape[:2]
+        confirmed: List[dict] = []
+
+        for bar in health_bars:
+            bx, by, bw, bh = bar["bbox"]
+
+            # Text ROI: a strip just below the health bar, padded 15 px
+            # on each side to catch the full username.
+            tx1 = max(0, bx - 15)
+            ty1 = by + bh
+            tx2 = min(frame_w, bx + bw + 15)
+            ty2 = min(frame_h, by + bh + 25)
+
+            if ty1 >= ty2 or tx1 >= tx2:
+                continue  # ROI fell off the frame edge
+
+            text_roi = frame[ty1:ty2, tx1:tx2]
+
+            # White-pixel mask: all three RGB channels above threshold
+            white_mask = (
+                (text_roi[:, :, 0] > self.white_threshold)
+                & (text_roi[:, :, 1] > self.white_threshold)
+                & (text_roi[:, :, 2] > self.white_threshold)
+            )
+            white_ratio = float(np.count_nonzero(white_mask)) / white_mask.size
+
+            if white_ratio >= self.text_confirm_ratio:
+                cx, cy = bar["center"]
+                confirmed.append({
+                    "hp_bar": bar["bbox"],
+                    "hp_pct": bar["hp_pct"],
+                    "player_center": (cx, cy + 50),
+                    "tag_center": (cx, cy),
+                    "text_confidence": white_ratio,
+                })
+
+        return confirmed
+
+    # ─────────────────────────────────────────────────────────────────
+    # Convenience wrappers
+    # ─────────────────────────────────────────────────────────────────
+    def detect_enemies(self, frame: np.ndarray) -> List[dict]:
+        """Full pipeline: detect bars → confirm via text anchor.
+
         Args:
-            frame: Input RGB frame
-            screen_center: Center point reference (defaults to image center)
-            
+            frame: RGB uint8 image.
+
         Returns:
-            Nearest bounding box (x, y, w, h) or None
+            List of confirmed enemy dicts (see :meth:`confirm_enemies`).
         """
+        bars = self.detect_health_bars(frame)
+        return self.confirm_enemies(frame, bars)
+
+    def get_nearest_enemy(
+        self,
+        frame: np.ndarray,
+        screen_center: Tuple[int, int] = None,
+    ) -> Optional[dict]:
+        """Return the confirmed enemy closest to *screen_center*.
+
+        Args:
+            frame:         RGB uint8 image.
+            screen_center: Reference point; defaults to frame centre.
+
+        Returns:
+            Enemy dict or ``None``.
+        """
+        enemies = self.detect_enemies(frame)
+        if not enemies:
+            return None
+
         if screen_center is None:
             screen_center = (frame.shape[1] // 2, frame.shape[0] // 2)
-        
-        all_boxes = []
-        
-        # Get all detected boxes
-        for idx in range(len(self.target_colors)):
-            mask = self.create_mask(frame, idx)
-            boxes = self.find_contours(mask)
-            all_boxes.extend(boxes)
-        
-        if not all_boxes:
-            return None
-        
-        # Find nearest to center
-        min_distance = float('inf')
-        nearest_box = None
-        
-        for box in all_boxes:
-            x, y, w, h = box
-            box_center = (x + w // 2, y + h // 2)
-            distance = np.sqrt(
-                (box_center[0] - screen_center[0])**2 + 
-                (box_center[1] - screen_center[1])**2
-            )
-            
-            if distance < min_distance:
-                min_distance = distance
-                nearest_box = box
-        
-        return nearest_box
+
+        sx, sy = screen_center
+        best = None
+        best_dist = float("inf")
+        for enemy in enemies:
+            px, py = enemy["player_center"]
+            dist = np.sqrt((px - sx) ** 2 + (py - sy) ** 2)
+            if dist < best_dist:
+                best_dist = dist
+                best = enemy
+
+        return best
+
+    # ─────────────────────────────────────────────────────────────────
+    # Safe-zone detection
+    # ─────────────────────────────────────────────────────────────────
+    def detect_safe_zone(self, frame: np.ndarray) -> bool:
+        """Check if the 'YOU ARE IN THE SAFE ZONE' banner is visible.
+
+        Looks for concentrated red/yellow pixels inside a fixed ROI at
+        the top-centre of the frame.
+
+        Args:
+            frame: RGB uint8 image (expected 800×600).
+
+        Returns:
+            ``True`` if the banner is detected (player is in safe zone).
+        """
+        rx, ry, rw, rh = self.safe_zone_roi
+        roi = frame[ry : ry + rh, rx : rx + rw]
+        roi_hsv = cv2.cvtColor(roi, cv2.COLOR_RGB2HSV)
+
+        # Red component
+        red1 = cv2.inRange(roi_hsv, self.banner_red_lower1, self.banner_red_upper1)
+        red2 = cv2.inRange(roi_hsv, self.banner_red_lower2, self.banner_red_upper2)
+        red_mask = cv2.bitwise_or(red1, red2)
+
+        # Yellow component
+        yellow_mask = cv2.inRange(
+            roi_hsv, self.banner_yellow_lower, self.banner_yellow_upper
+        )
+
+        banner_mask = cv2.bitwise_or(red_mask, yellow_mask)
+        banner_ratio = float(np.count_nonzero(banner_mask)) / banner_mask.size
+
+        return banner_ratio > 0.08
+
+
+# ── Backward compatibility ──────────────────────────────────────────
+ColorDetector = GameDetector
 
 
 if __name__ == "__main__":
-    # Test color detection
-    print("Color detector initialized")
-    print("Target colors should be configured based on your Roblox game")
-    print("Common Roblox character colors:")
-    print("  - Bright blue: (0, 107, 167)")
-    print("  - Bright red: (205, 0, 0)")
-    print("  - Yellow: (255, 255, 0)")
-    print("  - Green: (0, 255, 0)")
+    det = GameDetector()
+    print("╔══════════════════════════════════════════════╗")
+    print("║        GameDetector — Configuration          ║")
+    print("╠══════════════════════════════════════════════╣")
+    print(f"║  Green HSV       : {det.green_lower.tolist()} → {det.green_upper.tolist()}")
+    print(f"║  Red HSV (low)   : {det.red_lower1.tolist()} → {det.red_upper1.tolist()}")
+    print(f"║  Red HSV (high)  : {det.red_lower2.tolist()} → {det.red_upper2.tolist()}")
+    print(f"║  Bar width       : {det.min_bar_width} – {det.max_bar_width} px")
+    print(f"║  Bar max height  : {det.max_bar_height} px")
+    print(f"║  Min aspect ratio: {det.min_aspect_ratio}")
+    print(f"║  Safe-zone ROI   : x={det.safe_zone_roi[0]}, y={det.safe_zone_roi[1]}, "
+          f"w={det.safe_zone_roi[2]}, h={det.safe_zone_roi[3]}")
+    print(f"║  White threshold : {det.white_threshold}")
+    print(f"║  Text confirm %  : {det.text_confirm_ratio * 100:.1f}%")
+    print("╚══════════════════════════════════════════════╝")
+    print("\nColorDetector alias active:", ColorDetector is GameDetector)

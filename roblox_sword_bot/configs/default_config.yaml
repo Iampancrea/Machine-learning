@@ -1,5 +1,6 @@
 # Configuration for Roblox Sword Fight Bot
-# Optimized for Intel Iris Xe integrated graphics
+# Hybrid architecture: GameDetector + CNN spatial awareness
+# NO OCR — CNN branch handles UI/spatial pattern recognition
 
 # Hardware settings
 hardware:
@@ -13,24 +14,52 @@ capture:
   resolution: [800, 600]  # Strict bounding box captured at OS level (no resize)
   fps: 30  # Target capture FPS
   region: null  # null = centered 800x600 box, or [left, top, width, height]
-  compression_level: 1  # JPEG compression (1-100, lower=faster)
 
 # Feature extraction settings
 features:
   use_color_detection: true
-  use_template_matching: true
-  use_ocr: false  # OCR is CPU-intensive, disable for low-end systems
-  enemy_colors: [[255, 0, 0], [0, 255, 0], [0, 0, 255]]  # RGB values to detect
-  color_tolerance: 30  # Color matching tolerance (0-255)
+  use_geometric_anchoring: true
+  use_ocr: false  # DISABLED — CNN branch handles spatial/UI awareness
   feature_history_length: 10  # Number of past frames to consider
+  cnn_resolution: [80, 60]  # Width x Height for CNN input frame (grayscale)
+  
+  # Health bar detection (HSV ranges)
+  health_bar:
+    green_lower: [35, 80, 80]
+    green_upper: [85, 255, 255]
+    red_lower_1: [0, 80, 80]
+    red_upper_1: [10, 255, 255]
+    red_lower_2: [170, 80, 80]
+    red_upper_2: [180, 255, 255]
+    min_bar_width: 20
+    max_bar_width: 150
+    max_bar_height: 12
+    min_aspect_ratio: 3.0
+  
+  # White text confirmation for geometric anchoring
+  text_confirmation:
+    white_threshold: 200  # Min value in all RGB channels to count as "white"
+    min_white_ratio: 0.03  # At least 3% white pixels in text ROI
+  
+  # Safe zone detection (static ROI at top-center)
+  safe_zone:
+    roi: [150, 5, 500, 45]  # [x, y, width, height] relative to 800x600 capture
+    banner_red_lower_1: [0, 120, 150]
+    banner_red_upper_1: [10, 255, 255]
+    banner_red_lower_2: [170, 120, 150]
+    banner_red_upper_2: [180, 255, 255]
+    banner_yellow_lower: [15, 120, 150]
+    banner_yellow_upper: [35, 255, 255]
+    detection_threshold: 0.08  # Min banner color ratio to confirm safe zone
 
 # Model architecture
 model:
-  type: "mlp"  # "mlp" or "cnn" (mlp is faster for feature-based input)
-  hidden_layers: [256, 128, 64]  # Layer sizes
+  type: "hybrid"  # "mlp", "hybrid", or "actor_critic"
+  hidden_layers: [128, 64]  # MLP head layer sizes
   dropout: 0.1
   activation: "relu"
-  max_parameters: 500000  # Keep under 1M for Iris Xe
+  cnn_output_dim: 32  # Spatial CNN output features
+  max_parameters: 500000  # Keep under 500K for Iris Xe
 
 # Behavior Cloning training
 behavior_cloning:
@@ -38,7 +67,7 @@ behavior_cloning:
   batch_size: 32
   learning_rate: 0.001
   optimizer: "adam"
-  loss_function: "mse"
+  loss_function: "cross_entropy"
   early_stopping_patience: 10
   validation_split: 0.2
 
