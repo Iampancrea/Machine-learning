@@ -6,7 +6,7 @@ FIXED: pyautogui replaced with pydirectinput_rgx for DirectInput
        compatibility in 3D games (Roblox, etc.)
 FIXED: Async pynput ESC listener → os._exit(0) hard kill-switch.
 """
-import pydirectinput_rgx as pdi
+import pydirectinput as pdi
 import pynput.keyboard
 import pynput.mouse
 import numpy as np
