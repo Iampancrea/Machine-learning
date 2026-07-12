@@ -85,6 +85,29 @@ def transfer_bc_weights(ppo_model, bc_checkpoint_path: str):
     print(f"✅ Transferred {cnn_transferred} CNN layers and {mlp_transferred} Actor MLP layers.")
 
 
+def find_latest_checkpoint(save_dir: Path) -> Optional[Path]:
+    """Helper to find the latest saved RL checkpoint"""
+    if not save_dir.exists():
+        return None
+    
+    final_path = save_dir / "ppo_roblox_final.zip"
+    if final_path.exists():
+        return final_path
+        
+    checkpoints = list(save_dir.glob("ppo_roblox_*_steps.zip"))
+    if not checkpoints:
+        return None
+        
+    def get_step_count(path: Path):
+        try:
+            return int(path.stem.split('_')[2])
+        except (IndexError, ValueError):
+            return 0
+            
+    checkpoints.sort(key=get_step_count, reverse=True)
+    return checkpoints[0]
+
+
 class RLTrainer:
     def __init__(self, config: dict):
         self.config = config
@@ -95,6 +118,8 @@ class RLTrainer:
         
         bc_checkpoint = "checkpoints/best_model.pth"
         rl_config = self.config.get('reinforcement_learning', {})
+        save_dir = Path("checkpoints/rl_models")
+        save_dir.mkdir(parents=True, exist_ok=True)
         
         # Create Gym Environment
         env = RobloxGymEnv(config=self.config, checkpoint_path=bc_checkpoint)
@@ -107,28 +132,40 @@ class RLTrainer:
             net_arch=dict(pi=hidden_layers, vf=hidden_layers) # Actor and Critic branches
         )
         
-        print("\n🧠 Initializing PPO Agent...")
-        model = PPO(
-            "MultiInputPolicy",
-            env,
-            learning_rate=rl_config.get('learning_rate', 0.0003),
-            n_steps=rl_config.get('steps_per_episode', 500),
-            batch_size=64,
-            n_epochs=10,
-            gamma=rl_config.get('gamma', 0.99),
-            clip_range=rl_config.get('clip_range', 0.2),
-            ent_coef=0.05, # HIGH ENTROPY for forced curiosity (spamming clicks)
-            policy_kwargs=policy_kwargs,
-            verbose=1,
-            device=self.config.get('hardware', {}).get('device', 'cpu')
-        )
+        device = self.config.get('hardware', {}).get('device', 'cpu')
         
-        # Inject BC weights so it knows how to walk
-        transfer_bc_weights(model, bc_checkpoint)
+        # Check if we can resume training
+        latest_checkpoint = find_latest_checkpoint(save_dir)
+        
+        if latest_checkpoint:
+            print(f"\n♻️ Found existing training checkpoint: {latest_checkpoint}")
+            print("🧠 Loading PPO weights to resume training...")
+            model = PPO.load(
+                str(latest_checkpoint),
+                env=env,
+                device=device,
+                custom_objects={"policy_kwargs": policy_kwargs}
+            )
+        else:
+            print("\n🧠 Initializing PPO Agent from scratch...")
+            model = PPO(
+                "MultiInputPolicy",
+                env,
+                learning_rate=rl_config.get('learning_rate', 0.0003),
+                n_steps=rl_config.get('steps_per_episode', 500),
+                batch_size=64,
+                n_epochs=10,
+                gamma=rl_config.get('gamma', 0.99),
+                clip_range=rl_config.get('clip_range', 0.2),
+                ent_coef=0.05, # HIGH ENTROPY for forced curiosity (spamming clicks)
+                policy_kwargs=policy_kwargs,
+                verbose=1,
+                device=device
+            )
+            # Inject BC weights so it knows how to walk
+            transfer_bc_weights(model, bc_checkpoint)
         
         # Setup saving
-        save_dir = Path("checkpoints/rl_models")
-        save_dir.mkdir(parents=True, exist_ok=True)
         checkpoint_callback = CheckpointCallback(
             save_freq=1000,
             save_path=str(save_dir),
