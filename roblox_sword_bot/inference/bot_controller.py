@@ -214,7 +214,8 @@ class BotController:
                     fps = frame_count / max(elapsed, 0.001)
                     status = "SAFE" if in_safe_zone else ("AIMING" if enemies else "SEARCHING")
                     enemy_str = f"👥{len(enemies)}" if enemies else "👥0"
-                    print(f"\r[{status}] {enemy_str} | FPS: {fps:.1f} | Conf: {confidence:.3f}",
+                    action_str = f"Keys:{action['keys']} L:{action['click_left']}"
+                    print(f"\r[{status}] {enemy_str} | FPS: {fps:.1f} | Conf: {confidence:.3f} | Action: {action_str}",
                           end='', flush=True)
                 
                 # Frame rate limiting

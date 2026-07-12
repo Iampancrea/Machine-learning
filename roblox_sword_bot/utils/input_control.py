@@ -58,7 +58,7 @@ class InputController:
         self.config = config or {}
         
         # Human-like behavior settings
-        self.enable_delay = self.config.get('humanization', {}).get('enable_reaction_delay', True)
+        self.enable_delay = self.config.get('humanization', {}).get('enable_reaction_delay', False)
         self.min_reaction_time = self.config.get('humanization', {}).get('min_reaction_time_ms', 150) / 1000.0
         self.max_reaction_time = self.config.get('humanization', {}).get('max_reaction_time_ms', 350) / 1000.0
         self.jitter_std = self.config.get('humanization', {}).get('jitter_std', 0.05)
