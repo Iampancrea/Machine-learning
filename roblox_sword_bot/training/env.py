@@ -135,7 +135,7 @@ class RobloxGymEnv(gym.Env):
         enemies = self.game_detector.detect_enemies(frame)
         in_safe_zone = self.game_detector.detect_safe_zone(frame)
         player_health = self.game_detector.detect_player_health(frame)
-        kill_log_detected = self.game_detector.detect_kill_log(frame)
+        kill_log_status = self.game_detector.detect_kill_log(frame)
         
         # Extract features for NN
         struct, cnn = self.feature_engineer.extract_features(frame, enemies, in_safe_zone)
@@ -151,15 +151,20 @@ class RobloxGymEnv(gym.Env):
         terminated = False
         truncated = False
         
-        # Penalty for player damage or death
+        # Penalty for player damage
         if not self.is_dead:
             if player_health < self.last_player_health:
-                reward -= 5.0
-                print(f"💀 DAMAGE TAKEN! Health dropped to {player_health:.2f} (-5 Penalty)")
-                if player_health < 0.1:
-                    terminated = True
-                    self.is_dead = True
-                    print(f"☠️ DIED! Episode terminated.")
+                # Small penalty for taking damage
+                reward -= 1.0
+                print(f"🩸 TOOK DAMAGE! Health dropped to {player_health:.2f} (-1 Penalty)")
+                
+            # Check OCR Kill Log for actual death
+            if kill_log_status['death']:
+                reward -= 10.0
+                terminated = True
+                self.is_dead = True
+                print(f"☠️ OCR DEATH CONFIRMED! You were killed. (-10 Penalty)")
+                
         elif player_health > 0.8:
             # Respawned!
             self.is_dead = False
@@ -170,10 +175,10 @@ class RobloxGymEnv(gym.Env):
         if self.kill_cooldown > 0:
             self.kill_cooldown -= 1
             
-        if kill_log_detected and self.kill_cooldown == 0:
+        if kill_log_status['kill'] and self.kill_cooldown == 0:
             reward += 10.0
             self.kill_cooldown = 90 # Wait 90 frames (3 seconds) before allowing another kill reward
-            print("🩸 KILL CONFIRMED! ⏰ (+10 Reward)")
+            print("🩸 OCR KILL CONFIRMED! ⏰ (+10 Reward)")
             
         # Distance tracking logic (hunt reward / cowardice penalty)
         if enemies:

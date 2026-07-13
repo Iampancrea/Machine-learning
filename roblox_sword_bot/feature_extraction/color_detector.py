@@ -17,6 +17,7 @@ Frame assumptions:
 
 import numpy as np
 import cv2
+import easyocr
 from typing import List, Tuple, Optional
 
 
@@ -68,6 +69,10 @@ class GameDetector:
         self.white_threshold: int = cfg.get("white_threshold", 200)
         self.text_confirm_ratio: float = cfg.get("text_confirm_ratio", 0.03)
 
+        # ── OCR Reader for Kill Log ────────────────────────────────────
+        print("Initializing EasyOCR for Kill Log tracking... (this might take a second)")
+        self.reader = easyocr.Reader(['en'], gpu=True, verbose=False)
+
     # ── Player Health & Kill Log ─────────────────────────────────────
     
     def detect_player_health(self, frame: np.ndarray) -> float:
@@ -101,34 +106,49 @@ class GameDetector:
         health_ratio = min(1.0, health_pixels / 1500.0)
         return health_ratio
 
-    def detect_kill_log(self, frame: np.ndarray) -> bool:
+    def detect_kill_log(self, frame: np.ndarray) -> dict:
         """
-        Detect the kill log message at the bottom of the screen.
-        Looks for the distinct red/yellow clock icon '⏰' in the bottom 100 pixels.
-        Returns True if a kill log is present.
+        Detect kill/death events by reading the kill log text at the bottom-right.
+        
+        Kill log format in this game:
+            "[killer] stole [amount] from [victim] [distance] away"
+        
+        Returns:
+            dict with keys 'kill' (bool) and 'death' (bool)
         """
         h, w = frame.shape[:2]
-        roi = frame[h - 100:h, 0:w]
         
-        # Convert to HSV
-        hsv = cv2.cvtColor(roi, cv2.COLOR_RGB2HSV)
+        # Kill log is at the bottom-right corner of the screen
+        # Grab the bottom 80 pixels, right half of the screen
+        roi = frame[h - 80:h, w // 2:w]
         
-        # The clock icon has very distinct pure red and yellow pixels packed tightly
-        red1 = cv2.inRange(hsv, self.red_lower1, self.red_upper1)
-        red2 = cv2.inRange(hsv, self.red_lower2, self.red_upper2)
-        red = cv2.bitwise_or(red1, red2)
-        yellow = cv2.inRange(hsv, self.banner_yellow_lower, self.banner_yellow_upper)
+        # Run OCR on the kill log region
+        try:
+            results = self.reader.readtext(roi, detail=0)
+            text_full = " ".join(results).lower()
+        except Exception:
+            return {'kill': False, 'death': False}
         
-        # Dilate to connect the red and yellow parts of the clock
-        kernel = np.ones((3, 3), np.uint8)
-        red_dilated = cv2.dilate(red, kernel, iterations=1)
-        yellow_dilated = cv2.dilate(yellow, kernel, iterations=1)
+        player_name = "sagupaam6"
         
-        # Intersection: Where red and yellow are right next to each other
-        clock_mask = cv2.bitwise_and(red_dilated, yellow_dilated)
+        kill = False
+        death = False
         
-        # If we find a cluster of overlapping red/yellow, it's the clock icon
-        return cv2.countNonZero(clock_mask) > 5
+        # Check if we killed someone: "sagupaam6 stole"
+        if f"{player_name} stole" in text_full:
+            kill = True
+            
+        # Check if someone killed us: "from sagupaam6"
+        if f"from {player_name}" in text_full:
+            # Wait - "from sagupaam6" means WE are the victim
+            # Actually no: "X stole Y from Z" means X killed Z
+            # So "from sagupaam6" means someone stole FROM us = we died
+            death = True
+        
+        if kill or death:
+            print(f"    [OCR] Read: '{text_full}'")
+        
+        return {'kill': kill, 'death': death}
 
     # ─────────────────────────────────────────────────────────────────
     # STEP 1 — find health bars
