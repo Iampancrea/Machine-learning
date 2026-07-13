@@ -17,8 +17,13 @@ Frame assumptions:
 
 import numpy as np
 import cv2
-import easyocr
 from typing import List, Tuple, Optional
+
+try:
+    import easyocr
+    EASYOCR_AVAILABLE = True
+except ImportError:
+    EASYOCR_AVAILABLE = False
 
 
 class GameDetector:
@@ -70,8 +75,16 @@ class GameDetector:
         self.text_confirm_ratio: float = cfg.get("text_confirm_ratio", 0.03)
 
         # ── OCR Reader for Kill Log ────────────────────────────────────
-        print("Initializing EasyOCR for Kill Log tracking... (this might take a second)")
-        self.reader = easyocr.Reader(['en'], gpu=True, verbose=False)
+        self.use_ocr = cfg.get("features", {}).get("use_ocr", False)
+        self.reader = None
+        if self.use_ocr:
+            if EASYOCR_AVAILABLE:
+                print("Initializing EasyOCR for Kill Log tracking... (this might take a second)")
+                use_gpu = cfg.get("hardware", {}).get("use_gpu", False)
+                self.reader = easyocr.Reader(['en'], gpu=use_gpu, verbose=False)
+            else:
+                print("WARNING: easyocr is enabled in config but not installed! Disabling OCR features.")
+                self.use_ocr = False
 
     # ── Player Health & Kill Log ─────────────────────────────────────
     
@@ -122,6 +135,9 @@ class GameDetector:
         
         default_result = {'kill': False, 'death': False, 'killer': '', 'victim': ''}
         
+        if not self.use_ocr or self.reader is None:
+            return default_result
+            
         try:
             with mss.mss() as sct:
                 # Grab the bottom-right corner of the primary monitor
