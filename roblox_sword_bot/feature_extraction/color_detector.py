@@ -99,11 +99,18 @@ class GameDetector:
         # ── Death Detection Setup ────────────────────────────────────
         dd_cfg = features_cfg.get('death_detection', {})
         self.death_detection_enabled = dd_cfg.get("enabled", True)
-        self.death_bar_region = dd_cfg.get("screen_region", [1380, 3, 150, 32])
-        self.grey_sat_threshold = dd_cfg.get("grey_saturation_threshold", 30)
-        self.grey_val_min = dd_cfg.get("grey_value_min", 60)
-        self.grey_val_max = dd_cfg.get("grey_value_max", 180)
-        self.grey_pixel_ratio = dd_cfg.get("grey_pixel_ratio", 0.40)
+        self.death_bar_region = dd_cfg.get("screen_region", [1698, 20, 222, 45])
+        self.death_template_path = dd_cfg.get("template_path", "checkpoints/death_bar_template.png")
+        self.death_match_threshold = dd_cfg.get("match_threshold", 0.80)
+        self.death_template = None
+        if self.death_detection_enabled:
+            import os
+            if os.path.exists(self.death_template_path):
+                self.death_template = cv2.imread(self.death_template_path)
+                print(f"💀 Loaded death bar template from: {self.death_template_path}")
+            else:
+                print(f"⚠️  Death bar template not found at {self.death_template_path}! Disabling template-based death detection.")
+                self.death_detection_enabled = False
 
         # ── Enemy Detection Setup ────────────────────────────────────
         ed_cfg = features_cfg.get('enemy_detection', {})
@@ -237,16 +244,13 @@ class GameDetector:
     # ─────────────────────────────────────────────────────────────────
     def detect_death(self) -> bool:
         """
-        Detect if the player is dead by checking if the health bar in the
-        top-right corner has greyed out.
-
-        When alive: health bar has color (green/red with high saturation)
-        When dead:  health bar is grey (low saturation, medium value)
+        Detect if the player is dead by template matching the greyed-out health
+        bar in the top-right corner.
 
         Returns:
-            True if the player appears to be dead.
+            True if the player is dead.
         """
-        if not self.death_detection_enabled:
+        if not self.death_detection_enabled or self.death_template is None:
             return False
 
         try:
@@ -260,22 +264,11 @@ class GameDetector:
             screenshot = self._sct.grab(monitor)
             roi = np.array(screenshot)[:, :, :3]  # BGRA → BGR
 
-            # Convert to HSV for saturation analysis
-            hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+            # Match template
+            res = cv2.matchTemplate(roi, self.death_template, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, _ = cv2.minMaxLoc(res)
 
-            # Count "grey" pixels: low saturation, medium value
-            sat = hsv[:, :, 1]  # Saturation channel
-            val = hsv[:, :, 2]  # Value channel
-
-            grey_mask = (
-                (sat < self.grey_sat_threshold) &
-                (val > self.grey_val_min) &
-                (val < self.grey_val_max)
-            )
-
-            grey_ratio = np.count_nonzero(grey_mask) / grey_mask.size
-
-            return grey_ratio > self.grey_pixel_ratio
+            return max_val > self.death_match_threshold
 
         except Exception:
             return False

@@ -48,8 +48,8 @@ features:
     enabled: true
     player_name: "sagupaam6"  # Your Roblox username for kill detection
     # Absolute screen coordinates for the kill log ROI (bottom-right corner)
-    # For 1536x888 fullscreen: last ~98px of height, right ~70% of width
-    screen_region: [350, 795, 1186, 93]  # [left, top, width, height]
+    # For 1920x1200 screen (physical coordinates scanned by mss):
+    screen_region: [1300, 1080, 620, 60]  # [left, top, width, height]
     confidence_threshold: 0.4
     scan_interval_frames: 15  # OCR every 15 frames (~0.5 sec at 30fps)
     dedup_timeout_seconds: 4.0  # Ignore duplicate kill log lines within this window
@@ -58,13 +58,10 @@ features:
   death_detection:
     enabled: true
     # Absolute screen coordinates for the health bar ROI (top-right corner)
-    # On 1536x888: the grey rounded bar when dead
-    screen_region: [1380, 3, 150, 32]  # [left, top, width, height]
-    # When dead, the bar is grey (low saturation, medium value)
-    grey_saturation_threshold: 30  # Max saturation to count as "grey"
-    grey_value_min: 60   # Min value for grey (not black)
-    grey_value_max: 180  # Max value for grey (not white)
-    grey_pixel_ratio: 0.40  # At least 40% grey pixels = dead
+    # On 1920x1200: exact location of the health bar rounded rect
+    screen_region: [1698, 20, 222, 45]  # [left, top, width, height]
+    template_path: "checkpoints/death_bar_template.png"
+    match_threshold: 0.80  # Correlation threshold (dead if match > 0.80)
 
   # Enemy detection via green HP text nametags
   enemy_detection:
