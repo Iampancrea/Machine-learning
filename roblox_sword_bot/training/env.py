@@ -69,6 +69,7 @@ class RobloxGymEnv(gym.Env):
         
         self.is_dead = False
         self.kill_cooldown = 0
+        self.step_count = 0
         
     def _decode_action(self, action_idx: int) -> dict:
         """Convert integer action from PPO to our standard input dictionary"""
@@ -103,6 +104,9 @@ class RobloxGymEnv(gym.Env):
         
         self.is_dead = False
         self.kill_cooldown = 0
+        self.step_count = 0
+        
+        print(f"\n--- NEW EPISODE ---")
         
         # Get initial observation
         frame = self.screen_capture.capture()
@@ -122,20 +126,22 @@ class RobloxGymEnv(gym.Env):
         return obs, {}
 
     def step(self, action_idx):
+        self.step_count += 1
+        
         # 1. Execute Action
         action_dict = self._decode_action(int(action_idx))
         self.input_controller.execute_action(action_dict)
         
-        # DEBUG PRINTS FOR USER
-        if '1' in action_dict['keys'] or action_dict['click_left']:
-            print(f"🗡️ Action: Keys={action_dict['keys']} | Left Click={action_dict['click_left']}")
+        # Log ALL actions so we can see what keys the bot is actually pressing
+        keys_str = '+'.join(action_dict['keys']) if action_dict['keys'] else 'none'
+        click_str = 'M1' if action_dict.get('click_left') else ''
+        if keys_str != 'none' or click_str:
+            print(f"  [Step {self.step_count}] Keys: {keys_str} {click_str}")
         
         # 2. Get New State
         frame = self.screen_capture.capture()
         enemies = self.game_detector.detect_enemies(frame)
         in_safe_zone = self.game_detector.detect_safe_zone(frame)
-        player_health = self.game_detector.detect_player_health(frame)
-        kill_log_status = self.game_detector.detect_kill_log(frame)
         
         # Extract features for NN
         struct, cnn = self.feature_engineer.extract_features(frame, enemies, in_safe_zone)
@@ -151,34 +157,27 @@ class RobloxGymEnv(gym.Env):
         terminated = False
         truncated = False
         
-        # Penalty for player damage
-        if not self.is_dead:
-            if player_health < self.last_player_health:
-                # Small penalty for taking damage
-                reward -= 1.0
-                print(f"🩸 TOOK DAMAGE! Health dropped to {player_health:.2f} (-1 Penalty)")
-                
-            # Check OCR Kill Log for actual death
-            if kill_log_status['death']:
+        # Only run OCR every 30 frames (~1 second) to avoid destroying performance
+        if self.step_count % 30 == 0:
+            kill_log_status = self.game_detector.detect_kill_log(frame)
+            
+            # Check for death (someone killed us)
+            if kill_log_status['death'] and not self.is_dead:
                 reward -= 10.0
                 terminated = True
                 self.is_dead = True
-                print(f"☠️ OCR DEATH CONFIRMED! You were killed. (-10 Penalty)")
+                killer = kill_log_status.get('killer', 'unknown')
+                print(f"\n☠️ KILLED BY: {killer} (-10 Penalty) [Step {self.step_count}]\n")
+            
+            # Check for kill (we killed someone) with cooldown
+            if self.kill_cooldown > 0:
+                self.kill_cooldown -= 1
                 
-        elif player_health > 0.8:
-            # Respawned!
-            self.is_dead = False
-            
-        self.last_player_health = player_health
-        
-        # Huge reward for a kill (with 3 second cooldown at 30fps = 90 frames)
-        if self.kill_cooldown > 0:
-            self.kill_cooldown -= 1
-            
-        if kill_log_status['kill'] and self.kill_cooldown == 0:
-            reward += 10.0
-            self.kill_cooldown = 90 # Wait 90 frames (3 seconds) before allowing another kill reward
-            print("🩸 OCR KILL CONFIRMED! ⏰ (+10 Reward)")
+            if kill_log_status['kill'] and self.kill_cooldown == 0:
+                reward += 10.0
+                self.kill_cooldown = 3  # 3 OCR checks = ~3 seconds cooldown
+                victim = kill_log_status.get('victim', 'unknown')
+                print(f"\n🩸 KILL! You killed: {victim} (+10 Reward) [Step {self.step_count}]\n")
             
         # Distance tracking logic (hunt reward / cowardice penalty)
         if enemies:
@@ -198,3 +197,4 @@ class RobloxGymEnv(gym.Env):
             self.last_enemy_dist = None
             
         return obs, reward, terminated, truncated, {}
+

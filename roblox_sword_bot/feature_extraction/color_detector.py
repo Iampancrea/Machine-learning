@@ -114,7 +114,7 @@ class GameDetector:
             "[killer] stole [amount] from [victim] [distance] away"
         
         Returns:
-            dict with keys 'kill' (bool) and 'death' (bool)
+            dict with keys 'kill' (bool), 'death' (bool), 'killer' (str), 'victim' (str)
         """
         h, w = frame.shape[:2]
         
@@ -127,28 +127,39 @@ class GameDetector:
             results = self.reader.readtext(roi, detail=0)
             text_full = " ".join(results).lower()
         except Exception:
-            return {'kill': False, 'death': False}
+            return {'kill': False, 'death': False, 'killer': '', 'victim': ''}
         
         player_name = "sagupaam6"
         
-        kill = False
-        death = False
+        result = {'kill': False, 'death': False, 'killer': '', 'victim': ''}
         
-        # Check if we killed someone: "sagupaam6 stole"
+        # Check if we killed someone: "sagupaam6 stole ... from [victim]"
         if f"{player_name} stole" in text_full:
-            kill = True
+            result['kill'] = True
+            # Try to extract victim name: everything after "from " until next space or end
+            try:
+                after_from = text_full.split(f"{player_name} stole")[1]
+                if "from " in after_from:
+                    victim = after_from.split("from ")[1].split(" ")[0]
+                    result['victim'] = victim
+            except (IndexError, ValueError):
+                result['victim'] = 'someone'
             
-        # Check if someone killed us: "from sagupaam6"
+        # Check if someone killed us: "[killer] stole ... from sagupaam6"
         if f"from {player_name}" in text_full:
-            # Wait - "from sagupaam6" means WE are the victim
-            # Actually no: "X stole Y from Z" means X killed Z
-            # So "from sagupaam6" means someone stole FROM us = we died
-            death = True
+            result['death'] = True
+            # Try to extract killer name: everything before "stole"
+            try:
+                before_stole = text_full.split("stole")[0].strip()
+                # The killer name is the last word(s) before "stole"
+                result['killer'] = before_stole.split()[-1] if before_stole else 'someone'
+            except (IndexError, ValueError):
+                result['killer'] = 'someone'
         
-        if kill or death:
+        if result['kill'] or result['death']:
             print(f"    [OCR] Read: '{text_full}'")
         
-        return {'kill': kill, 'death': death}
+        return result
 
     # ─────────────────────────────────────────────────────────────────
     # STEP 1 — find health bars
