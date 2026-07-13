@@ -164,7 +164,7 @@ class BotController:
             conf = confidence.item()
             
             if conf < self.confidence_threshold:
-                return {'keys': [], 'mouse_dx': 0, 'mouse_dy': 0, 'click': False}, conf
+                return {'keys': [], 'mouse_dx': 0, 'mouse_dy': 0, 'click_left': False, 'click_right': False, 'click': False}, conf
             
             action = self._decode_action(action_idx)
             return action, conf

@@ -62,6 +62,9 @@ class InputController:
         self.min_reaction_time = self.config.get('humanization', {}).get('min_reaction_time_ms', 150) / 1000.0
         self.max_reaction_time = self.config.get('humanization', {}).get('max_reaction_time_ms', 350) / 1000.0
         self.jitter_std = self.config.get('humanization', {}).get('jitter_std', 0.05)
+        
+        self.left_held = False
+        self.right_held = False
         self.action_randomness = self.config.get('humanization', {}).get('action_randomness', 0.02)
         
         # Mouse settings
@@ -266,10 +269,12 @@ class InputController:
         
         # Execute right click (RMB) hold/release for camera rotation when not in Shift Lock
         click_right = action.get('click_right', False)
-        if click_right:
+        if click_right and not self.right_held:
             pdi.mouseDown(button='right')
-        else:
+            self.right_held = True
+        elif not click_right and self.right_held:
             pdi.mouseUp(button='right')
+            self.right_held = False
             
         # Execute mouse movement
         if 'mouse_dx' in action and 'mouse_dy' in action:
@@ -280,18 +285,26 @@ class InputController:
         
         # Execute left click (M1)
         click_left = action.get('click_left', action.get('click', False))
-        if click_left:
+        if click_left and not self.left_held:
             pdi.mouseDown(button='left')
             time.sleep(0.01)
             pdi.mouseUp(button='left')
-        else:
+            # It's an instant click-release, so we don't hold the state
+        elif not click_left and self.left_held:
             pdi.mouseUp(button='left')
+            self.left_held = False
     
     def reset(self):
         """Release all keys and reset state"""
         for key in list(self.pressed_keys):
             self.release_key(key)
         self.pressed_keys.clear()
+        if self.left_held:
+            pdi.mouseUp(button='left')
+            self.left_held = False
+        if self.right_held:
+            pdi.mouseUp(button='right')
+            self.right_held = False
     
     def start_listeners(self, on_press=None, on_release=None):
         """Start keyboard listeners for manual override"""

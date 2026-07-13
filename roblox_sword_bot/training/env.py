@@ -100,7 +100,7 @@ class RobloxGymEnv(gym.Env):
         
         self.last_enemy_dist = None
         self.last_player_health = 1.0
-        self.last_enemy_health = 1.0
+        self.prev_enemy_hp = None
         
         self.is_dead = False
         self.kill_cooldown = 0
@@ -197,20 +197,33 @@ class RobloxGymEnv(gym.Env):
             
         # Distance tracking logic (hunt reward / cowardice penalty)
         if enemies:
-            # Find nearest enemy distance (normalize to screen width)
+            # Find nearest enemy
             cx, cy = frame.shape[1]//2, frame.shape[0]//2
-            nearest = min([np.sqrt((e['player_center'][0] - cx)**2 + (e['player_center'][1] - cy)**2) for e in enemies])
+            nearest_enemy = min(enemies, key=lambda e: np.sqrt((e['player_center'][0] - cx)**2 + (e['player_center'][1] - cy)**2))
+            nearest_dist = np.sqrt((nearest_enemy['player_center'][0] - cx)**2 + (nearest_enemy['player_center'][1] - cy)**2)
             
+            # Distance reward
             if self.last_enemy_dist is not None:
-                dist_delta = self.last_enemy_dist - nearest
+                dist_delta = self.last_enemy_dist - nearest_dist
                 if dist_delta > 5: # Moved significantly closer
-                    reward += 0.5
+                    reward += 0.05
                 elif dist_delta < -5: # Moved significantly further (cowardice)
                     reward -= 0.01
             
-            self.last_enemy_dist = nearest
+            self.last_enemy_dist = nearest_dist
+            
+            # Dense Combat Reward
+            current_enemy_hp = nearest_enemy.get('hp_pct', 1.0)
+            if self.prev_enemy_hp is not None:
+                hp_drop = self.prev_enemy_hp - current_enemy_hp
+                if 0.05 < hp_drop < 0.95:  # Filter out extreme noise (respawns or false detections)
+                    reward += hp_drop * 10.0  # Big reward for landing hits
+                    print(f"\n🗡️ HIT! Enemy lost {hp_drop*100:.0f}% HP! (+{hp_drop*10.0:.2f} Reward) [Step {self.step_count}]\n")
+            
+            self.prev_enemy_hp = current_enemy_hp
         else:
             self.last_enemy_dist = None
+            self.prev_enemy_hp = None
             
         return obs, reward, terminated, truncated, {}
 

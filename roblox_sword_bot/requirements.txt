@@ -20,8 +20,6 @@ stable-baselines3>=2.9.0
 
 # Utilities
 tqdm>=4.65.0
-logging
-datetime
 
 # Optional: OCR (comment out if not needed)
 # pytesseract>=0.3.10

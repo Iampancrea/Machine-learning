@@ -85,6 +85,8 @@ class GameDetector:
             else:
                 print("WARNING: easyocr is enabled in config but not installed! Disabling OCR features.")
                 self.use_ocr = False
+                
+        self.player_name = cfg.get("features", {}).get("kill_log", {}).get("player_name", "sagupaam6")
 
     # ── Player Health & Kill Log ─────────────────────────────────────
     
@@ -169,7 +171,7 @@ class GameDetector:
         if not text_full.strip():
             return default_result
             
-        player_name = "sagupaam6"
+        player_name = self.player_name
         
         result = {'kill': False, 'death': False, 'killer': '', 'victim': ''}
         

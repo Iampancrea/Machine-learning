@@ -86,7 +86,7 @@ def run_recording(args):
         # Arm ESC kill-switch
         _start_esc_kill_switch()
         
-        config = load_config(args.config.replace('configs/', ''))
+        config = load_config(args.config)
         recorder = DataRecorder(config=config.config)
         action_logger = ActionLogger()
         
@@ -190,7 +190,7 @@ def run_behavior_cloning(args):
         from training.train_bc import BehaviorCloningTrainer
         from utils.config import load_config
         
-        config = load_config(args.config.replace('configs/', ''))
+        config = load_config(args.config)
         trainer = BehaviorCloningTrainer(config=config.config)
         
         print("\nLoading training data...")
@@ -222,7 +222,7 @@ def run_reinforcement_learning(args):
         from training.train_rl import RLTrainer
         from utils.config import load_config
         
-        config = load_config(args.config.replace('configs/', ''))
+        config = load_config(args.config)
         trainer = RLTrainer(config=config.config)
         
         print(f"\nStarting PPO training on {config['hardware']['device']}...")
@@ -250,7 +250,7 @@ def run_bot(args):
         from inference.bot_controller import BotController
         from utils.config import load_config
         
-        config = load_config(args.config.replace('configs/', ''))
+        config = load_config(args.config)
         controller = BotController(model_path=args.model, config=config.config)
         
         print("\n⚠️  IMPORTANT: Make sure Roblox is running!")
@@ -304,8 +304,8 @@ def run_tests(args):
         from feature_extraction.feature_engineer import FeatureEngineer
         engineer = FeatureEngineer()
         frame = np.random.randint(0, 255, (180, 320, 3), dtype=np.uint8)
-        features = engineer.extract_features(frame, enemy_box=(100, 50, 40, 80))
-        print(f"  ✅ Features extracted (shape: {features.shape})")
+        features, cnn_frame = engineer.extract_features(frame, enemies=[], in_safe_zone=False, game_state=None)
+        print(f"  ✅ Features extracted (struct shape: {features.shape}, cnn shape: {cnn_frame.shape})")
         tests_passed += 1
     except Exception as e:
         print(f"  ❌ Feature test failed: {e}")

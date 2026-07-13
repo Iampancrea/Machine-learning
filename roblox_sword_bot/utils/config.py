@@ -57,16 +57,24 @@ class Config:
         print(f"Configuration saved to {save_path}")
 
 
-def load_config(config_name: str = "default_config") -> Config:
+def load_config(config_path: str = "configs/default_config.yaml") -> Config:
     """Convenience function to load configuration"""
-    # Strip extension if present
-    if config_name.endswith('.yaml'):
-        config_name = config_name[:-5]
-    elif config_name.endswith('.yml'):
-        config_name = config_name[:-4]
-        
-    config_path = Path(__file__).parent.parent / "configs" / f"{config_name}.yaml"
-    return Config(str(config_path))
+    path = Path(config_path)
+    if not path.is_absolute():
+        project_root = Path(__file__).parent.parent
+        # Try relative to cwd
+        if not path.exists():
+            # Try relative to project root
+            test_path = project_root / config_path
+            if test_path.exists():
+                path = test_path
+            # Fallback to configs/ directory
+            elif not str(config_path).startswith("configs/") and not str(config_path).endswith(".yaml"):
+                test_path = project_root / "configs" / f"{config_path}.yaml"
+                if test_path.exists():
+                    path = test_path
+                    
+    return Config(str(path))
 
 
 if __name__ == "__main__":

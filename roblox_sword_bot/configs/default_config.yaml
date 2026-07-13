@@ -42,6 +42,11 @@ features:
     min_white_ratio: 0.03  # At least 3% white pixels in text ROI
   
   # Safe zone detection (static ROI at top-center)
+  kill_log:
+    enabled: true
+    box: [280, 20, 400, 150]  # [x, y, w, h] roughly top right
+    confidence_threshold: 0.6
+    player_name: "sagupaam6"  # Your Roblox username for kill detection
   safe_zone:
     roi: [150, 5, 500, 45]  # [x, y, width, height] relative to 800x600 capture
     banner_red_lower_1: [0, 120, 150]
@@ -54,7 +59,7 @@ features:
 
 # Model architecture
 model:
-  type: "hybrid"  # "mlp", "hybrid", or "actor_critic"
+  type: "hybrid"  # "mlp" or "hybrid"
   hidden_layers: [128, 64]  # MLP head layer sizes
   dropout: 0.1
   activation: "relu"
