@@ -107,11 +107,20 @@ class InputController:
         
         # Normalize key name for pydirectinput-rgx
         key = key.upper()
+        if key.startswith('KEY.'):
+            key = key[4:]
+            
         key_map = {
             'SPACE': 'space',
             'SHIFT': 'shift',
+            'SHIFT_L': 'shift',
+            'SHIFT_R': 'shift',
             'CTRL': 'ctrl',
+            'CTRL_L': 'ctrl',
+            'CTRL_R': 'ctrl',
             'ALT': 'alt',
+            'ALT_L': 'alt',
+            'ALT_R': 'alt',
         }
         pdi_key = key_map.get(key, key.lower())
         
@@ -130,11 +139,20 @@ class InputController:
             key: Key to release
         """
         key = key.upper()
+        if key.startswith('KEY.'):
+            key = key[4:]
+            
         key_map = {
             'SPACE': 'space',
             'SHIFT': 'shift',
+            'SHIFT_L': 'shift',
+            'SHIFT_R': 'shift',
             'CTRL': 'ctrl',
+            'CTRL_L': 'ctrl',
+            'CTRL_R': 'ctrl',
             'ALT': 'alt',
+            'ALT_L': 'alt',
+            'ALT_R': 'alt',
         }
         pdi_key = key_map.get(key, key.lower())
         
