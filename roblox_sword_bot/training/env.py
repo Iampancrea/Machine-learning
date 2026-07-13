@@ -105,6 +105,7 @@ class RobloxGymEnv(gym.Env):
         self.is_dead = False
         self.kill_cooldown = 0
         self.step_count = 0
+        self.last_step_time = time.time()
         
         print(f"\n--- NEW EPISODE ---")
         
@@ -127,6 +128,13 @@ class RobloxGymEnv(gym.Env):
 
     def step(self, action_idx):
         self.step_count += 1
+        
+        # Enforce 30 FPS limit to prevent PC from overheating
+        target_frame_time = 1.0 / 30.0
+        elapsed = time.time() - self.last_step_time
+        if elapsed < target_frame_time:
+            time.sleep(target_frame_time - elapsed)
+        self.last_step_time = time.time()
         
         # 1. Execute Action
         action_dict = self._decode_action(int(action_idx))
