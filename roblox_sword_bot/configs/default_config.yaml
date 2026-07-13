@@ -2,7 +2,7 @@
 # Hybrid architecture: GameDetector + CNN spatial awareness
 # Resolution: 1536x888 fullscreen
 
-# Hardware settings
+# Hardware settings 
 hardware:
   use_gpu: false  # Set to true if you have dedicated GPU
   device: "cpu"   # or "cuda" if GPU available
@@ -11,9 +11,9 @@ hardware:
 
 # Screen capture settings
 capture:
-  resolution: [800, 600]  # Strict bounding box captured at OS level (no resize)
+  resolution: [1536, 888]  # Capture the FULL screen (no tiny crops)
   fps: 30  # Target capture FPS
-  region: null  # null = centered 800x600 box, or [left, top, width, height]
+  region: null  # null = centers the resolution box on screen (which is now full screen)
   # For 1536x888 fullscreen, centered 800x600 = {left: 368, top: 144}
   screen_resolution: [1536, 888]  # Your actual Roblox fullscreen resolution
 

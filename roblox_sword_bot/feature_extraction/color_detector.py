@@ -359,6 +359,18 @@ class GameDetector:
         ui_cutoff = int(width * 0.18)
         green_mask[:, :ui_cutoff] = 0
 
+        # Exclude player center (own health bar/sword)
+        # Creates a blank box in the exact middle of the screen (20% width, 30% height)
+        cx_c = width // 2
+        cy_c = height // 2
+        box_w = int(width * 0.20)
+        box_h = int(height * 0.30)
+        x1 = max(0, cx_c - box_w // 2)
+        x2 = min(width, cx_c + box_w // 2)
+        y1 = max(0, cy_c - box_h // 2)
+        y2 = min(height, cy_c + box_h // 2)
+        green_mask[y1:y2, x1:x2] = 0
+
         # Morphological operations to clean up noise and connect text fragments
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 3))
         green_mask = cv2.morphologyEx(green_mask, cv2.MORPH_CLOSE, kernel)
