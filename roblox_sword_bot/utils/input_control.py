@@ -257,12 +257,20 @@ class InputController:
                    - 'keys': List of keys to press
                    - 'mouse_dx': Mouse horizontal movement
                    - 'mouse_dy': Mouse vertical movement
-                   - 'click': Whether to click
+                   - 'click_left': Whether to click/hold left click
+                   - 'click_right': Whether to click/hold right click
         """
         # Execute keyboard actions
         if 'keys' in action:
             self.execute_keys(action['keys'])
         
+        # Execute right click (RMB) hold/release for camera rotation when not in Shift Lock
+        click_right = action.get('click_right', False)
+        if click_right:
+            pdi.mouseDown(button='right')
+        else:
+            pdi.mouseUp(button='right')
+            
         # Execute mouse movement
         if 'mouse_dx' in action and 'mouse_dy' in action:
             self.move_mouse_relative(
@@ -270,9 +278,14 @@ class InputController:
                 action['mouse_dy']
             )
         
-        # Execute click
-        if action.get('click', False):
-            self.click(button='left')
+        # Execute left click (M1)
+        click_left = action.get('click_left', action.get('click', False))
+        if click_left:
+            pdi.mouseDown(button='left')
+            time.sleep(0.01)
+            pdi.mouseUp(button='left')
+        else:
+            pdi.mouseUp(button='left')
     
     def reset(self):
         """Release all keys and reset state"""
