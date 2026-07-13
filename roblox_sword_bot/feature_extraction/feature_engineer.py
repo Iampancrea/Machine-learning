@@ -126,6 +126,21 @@ class FeatureEngineer:
         cnn_frame = self.prepare_cnn_frame(frame)
         color_variance = np.std(cnn_frame) / 255.0
         
+        # ─── Build Enemy Mask (Channel 2) ───
+        mask = np.zeros((self.cnn_resolution[1], self.cnn_resolution[0]), dtype=np.uint8)
+        scale_x = self.cnn_resolution[0] / frame.shape[1]
+        scale_y = self.cnn_resolution[1] / frame.shape[0]
+        
+        for enemy in enemies:
+            if 'player_center' in enemy:
+                ex = int(enemy['player_center'][0] * scale_x)
+                ey = int(enemy['player_center'][1] * scale_y)
+                # Draw a bright circle (blob) for the enemy
+                cv2.circle(mask, (ex, ey), radius=3, color=255, thickness=-1)
+                
+        # Stack channels: (Grayscale, EnemyMask) -> shape (2, 60, 80)
+        cnn_2channel = np.stack([cnn_frame, mask], axis=0)
+        
         features.extend([avg_brightness, color_variance])  # 9-10
         
         # ─── Store base features in history ───
@@ -153,7 +168,7 @@ class FeatureEngineer:
         if len(structured) < total_dim:
             structured = np.pad(structured, (0, total_dim - len(structured)))
         
-        return structured, cnn_frame
+        return structured, cnn_2channel
     
     def reset(self):
         """Clear feature history"""

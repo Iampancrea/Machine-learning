@@ -56,9 +56,18 @@ def transfer_bc_weights(ppo_model, bc_checkpoint_path: str):
         if k.startswith('cnn.'):
             # In SB3, our feature extractor is under features_extractor.cnn
             target_key = f"features_extractor.{k}"
-            if target_key in policy_state and policy_state[target_key].shape == v.shape:
-                policy_state[target_key] = v
-                cnn_transferred += 1
+            if target_key in policy_state:
+                target_v = policy_state[target_key]
+                if target_v.shape == v.shape:
+                    policy_state[target_key] = v
+                    cnn_transferred += 1
+                elif k == 'cnn.conv_stack.0.weight' and target_v.shape[1] == 2 and v.shape[1] == 1:
+                    print("🔪 Surgically adapting Conv1 weights from 1-channel to 2-channel...")
+                    new_w = target_v.clone()
+                    new_w[:, 0:1, :, :] = v   # Grayscale channel = BC weights
+                    new_w[:, 1:2, :, :] = 0.0 # Mask channel = initialized to 0
+                    policy_state[target_key] = new_w
+                    cnn_transferred += 1
     
     # 2. Transfer Actor MLP weights (BC's mlp_head → SB3's policy_net + action_net)
     # BC HybridNetwork: mlp_head = Linear→ReLU→Dropout→Linear→ReLU→Dropout→Linear

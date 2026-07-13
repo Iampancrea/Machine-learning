@@ -55,7 +55,7 @@ class RobloxGymEnv(gym.Env):
         # Action space: Discrete based on BC mapping
         self.action_space = spaces.Discrete(self.num_actions)
         
-        # Observation space: Dict with structured (1D) and cnn_frame (2D)
+        # Observation space: Dict with structured (1D) and cnn_frame (2D/3D)
         self.observation_space = spaces.Dict({
             "structured": spaces.Box(
                 low=-np.inf, high=np.inf, 
@@ -64,7 +64,7 @@ class RobloxGymEnv(gym.Env):
             ),
             "cnn_frame": spaces.Box(
                 low=0.0, high=1.0,
-                shape=(1, cnn_res[1], cnn_res[0]),
+                shape=(2, cnn_res[1], cnn_res[0]),
                 dtype=np.float32
             )
         })
@@ -158,8 +158,8 @@ class RobloxGymEnv(gym.Env):
         
         struct, cnn = self.feature_engineer.extract_features(frame, enemies, in_safe_zone)
         
-        # Convert cnn from (H, W) to (1, H, W) for Dict space compatibility
-        cnn = np.expand_dims(cnn.astype(np.float32) / 255.0, axis=0)
+        # cnn is now shape (2, H, W)
+        cnn = cnn.astype(np.float32) / 255.0
         
         obs = {
             "structured": struct.astype(np.float32),
@@ -262,7 +262,7 @@ class RobloxGymEnv(gym.Env):
                 
         # Only compute the CNN features on the FINAL frame of the action repeat loop to save CPU
         struct, cnn = self.feature_engineer.extract_features(frame, enemies, in_safe_zone)
-        cnn = np.expand_dims(cnn.astype(np.float32) / 255.0, axis=0)
+        cnn = cnn.astype(np.float32) / 255.0
         obs = {
             "structured": struct.astype(np.float32),
             "cnn_frame": cnn

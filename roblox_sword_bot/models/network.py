@@ -154,20 +154,22 @@ class SpatialCNN(nn.Module):
     Stays under 100K parameters — built to purr on Intel Iris Xe.
     """
 
-    def __init__(self, output_dim: int = 32):
+    def __init__(self, output_dim: int = 32, in_channels: int = 2):
         """
         Initialize SpatialCNN
 
         Args:
             output_dim: Dimensionality of the spatial feature vector
+            in_channels: Number of input channels (e.g., 2 for Grayscale + Enemy Mask)
         """
         super(SpatialCNN, self).__init__()
 
         self.output_dim = output_dim
+        self.in_channels = in_channels
 
-        # Conv stack: 1×60×80 → 16×30×40 → 32×15×20 → 32×8×10 → pool to 32×4×5
+        # Conv stack: 2×60×80 → 16×30×40 → 32×15×20 → 32×8×10 → pool to 32×4×5
         self.conv_stack = nn.Sequential(
-            nn.Conv2d(1, 16, kernel_size=3, stride=2, padding=1),
+            nn.Conv2d(in_channels, 16, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm2d(16),
             nn.ReLU(),
             nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1),
