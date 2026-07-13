@@ -120,6 +120,10 @@ class RobloxGymEnv(gym.Env):
         action_dict = self._decode_action(int(action_idx))
         self.input_controller.execute_action(action_dict)
         
+        # DEBUG PRINTS FOR USER
+        if '1' in action_dict['keys'] or action_dict['click_left']:
+            print(f"🗡️ Action: Keys={action_dict['keys']} | Left Click={action_dict['click_left']}")
+        
         # 2. Get New State
         frame = self.screen_capture.capture()
         enemies = self.game_detector.detect_enemies(frame)
@@ -144,13 +148,16 @@ class RobloxGymEnv(gym.Env):
         # Penalty for player damage or death
         if player_health < self.last_player_health:
             reward -= 5.0
+            print(f"💀 DAMAGE TAKEN! Health dropped to {player_health:.2f} (-5 Penalty)")
             if player_health < 0.1:
                 terminated = True
+                print(f"☠️ DIED! Episode terminated.")
         self.last_player_health = player_health
         
         # Huge reward for a kill
         if kill_log_detected:
             reward += 10.0
+            print("🩸 KILL CONFIRMED! ⏰ (+10 Reward)")
             
         # Distance tracking logic (hunt reward / cowardice penalty)
         if enemies:
