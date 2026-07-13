@@ -28,7 +28,7 @@ class FeatureEngineer:
         self.feature_history = deque(maxlen=history_length)
         
         # Per-frame structured feature count (BEFORE history)
-        self._base_feature_count = 11
+        self._base_feature_count = 13
         # Historical features tracked per past frame
         self._hist_features_per_frame = 3
         
@@ -58,6 +58,8 @@ class FeatureEngineer:
     def extract_features(self, frame: np.ndarray,
                         enemies: List[dict],
                         in_safe_zone: bool,
+                        player_health: float = 1.0,
+                        last_action: Optional[Dict] = None,
                         game_state: Optional[Dict] = None
                         ) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -68,12 +70,14 @@ class FeatureEngineer:
             enemies: List of confirmed enemy dicts from GameDetector.detect_enemies()
                      Each dict has: hp_bar, hp_pct, player_center, tag_center, text_confidence
             in_safe_zone: Whether player is currently in the safe zone
+            player_health: Estimated player health (0.0 to 1.0)
+            last_action: The action dictionary executed in the previous step
             game_state: Optional additional state (reserved for future use)
             
         Returns:
             Tuple of (structured_features, cnn_frame)
             - structured_features: 1D float32 numpy array
-            - cnn_frame: 2D float32 numpy array of shape (60, 80)
+            - cnn_frame: 3D float32 numpy array of shape (2, 60, 80)
         """
         features = []
         
@@ -141,7 +145,12 @@ class FeatureEngineer:
         # Stack channels: (Grayscale, EnemyMask) -> shape (2, 60, 80)
         cnn_2channel = np.stack([cnn_frame, mask], axis=0)
         
-        features.extend([avg_brightness, color_variance])  # 9-10
+        # ─── Player State Features ───
+        click_state = 0.0
+        if last_action and 'click' in last_action:
+            click_state = 1.0 if last_action['click'] else 0.0
+            
+        features.extend([avg_brightness, color_variance, player_health, click_state])  # 9-12
         
         # ─── Store base features in history ───
         base_features = np.array(features[:self._base_feature_count],

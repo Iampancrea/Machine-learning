@@ -90,8 +90,23 @@ def transfer_bc_weights(ppo_model, bc_checkpoint_path: str):
     mlp_transferred = 0
     for bc_k, sb3_k in mlp_map.items():
         if bc_k in bc_state and sb3_k in policy_state:
-            if bc_state[bc_k].shape == policy_state[sb3_k].shape:
-                policy_state[sb3_k] = bc_state[bc_k]
+            v_bc = bc_state[bc_k]
+            v_sb3 = policy_state[sb3_k]
+            
+            if v_bc.shape == v_sb3.shape:
+                policy_state[sb3_k] = v_bc
+                mlp_transferred += 1
+            elif bc_k == 'mlp_head.0.weight' and v_bc.shape[1] < v_sb3.shape[1]:
+                print("🔪 Surgically adapting MLP weights for new Player State features...")
+                new_w = v_sb3.clone()
+                # Old base features (0-10) -> (0-10)
+                new_w[:, 0:11] = v_bc[:, 0:11]
+                # New features (11-12) -> initialized to 0
+                new_w[:, 11:13] = 0.0
+                # Remaining historical + CNN features shifted by 2
+                new_w[:, 13:] = v_bc[:, 11:]
+                
+                policy_state[sb3_k] = new_w
                 mlp_transferred += 1
                 
     ppo_model.policy.load_state_dict(policy_state)

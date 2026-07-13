@@ -273,6 +273,49 @@ class GameDetector:
         except Exception:
             return False
 
+    def get_player_health(self) -> float:
+        """
+        Estimates the player's health percentage by looking at the top-right health bar.
+        Returns 1.0 if the bar is hidden (full health), or a float between 0.0 and 1.0.
+        """
+        if not self.death_detection_enabled:
+            return 1.0
+            
+        try:
+            region = self.death_bar_region
+            monitor = {
+                "left": region[0],
+                "top": region[1],
+                "width": region[2],
+                "height": region[3],
+            }
+            screenshot = self._sct.grab(monitor)
+            roi = np.array(screenshot)[:, :, :3]  # BGRA → BGR
+            hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+            
+            # Color ranges for the health bar
+            mask_g = cv2.inRange(hsv, np.array([35, 50, 50]), np.array([85, 255, 255]))
+            mask_y = cv2.inRange(hsv, np.array([20, 100, 100]), np.array([35, 255, 255]))
+            mask_r1 = cv2.inRange(hsv, np.array([0, 100, 100]), np.array([10, 255, 255]))
+            mask_r2 = cv2.inRange(hsv, np.array([160, 100, 100]), np.array([180, 255, 255]))
+            
+            mask_total = mask_g | mask_y | mask_r1 | mask_r2
+            
+            # Find columns that have at least one colored pixel
+            colored_cols = np.where(np.any(mask_total > 0, axis=0))[0]
+            
+            if len(colored_cols) == 0:
+                # If no health bar colors are detected, the bar is hidden (health is 100%)
+                return 1.0
+                
+            bar_width = colored_cols[-1] - colored_cols[0]
+            hp_pct = float(bar_width) / (region[2] - 4) # subtracting 4 for borders
+            
+            return max(0.01, min(1.0, hp_pct)) # min 1% if visible
+            
+        except Exception:
+            return 1.0
+
     # ─────────────────────────────────────────────────────────────────
     # Enemy Detection (green HP text nametags)
     # ─────────────────────────────────────────────────────────────────

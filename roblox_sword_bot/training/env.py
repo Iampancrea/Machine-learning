@@ -155,9 +155,14 @@ class RobloxGymEnv(gym.Env):
         frame = self.screen_capture.capture()
         enemies = self.game_detector.detect_enemies(frame)
         in_safe_zone = self.game_detector.detect_safe_zone(frame)
-        
-        struct, cnn = self.feature_engineer.extract_features(frame, enemies, in_safe_zone)
-        
+        player_health = self.game_detector.get_player_health()
+        struct, cnn = self.feature_engineer.extract_features(
+            frame=frame, 
+            enemies=enemies, 
+            in_safe_zone=in_safe_zone,
+            player_health=player_health,
+            last_action=None
+        )
         # cnn is now shape (2, H, W)
         cnn = cnn.astype(np.float32) / 255.0
         
@@ -261,7 +266,14 @@ class RobloxGymEnv(gym.Env):
                 break
                 
         # Only compute the CNN features on the FINAL frame of the action repeat loop to save CPU
-        struct, cnn = self.feature_engineer.extract_features(frame, enemies, in_safe_zone)
+        player_health = self.game_detector.get_player_health()
+        struct, cnn = self.feature_engineer.extract_features(
+            frame=frame, 
+            enemies=enemies, 
+            in_safe_zone=in_safe_zone,
+            player_health=player_health,
+            last_action=self.last_action
+        )
         cnn = cnn.astype(np.float32) / 255.0
         obs = {
             "structured": struct.astype(np.float32),
