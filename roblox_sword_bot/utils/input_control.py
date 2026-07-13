@@ -22,8 +22,11 @@ from typing import List, Tuple, Optional, Dict
 #  Spawns a daemon thread that listens for the Escape key at all times.
 #  When pressed, os._exit(0) bypasses all cleanup and nukes the process.
 # ─────────────────────────────────────────────────────────────────────
+import _thread
+
 _kill_switch_active = False
 _kill_switch_lock = threading.Lock()
+_last_esc_time = 0.0
 
 
 def _start_esc_kill_switch():
@@ -35,14 +38,22 @@ def _start_esc_kill_switch():
         _kill_switch_active = True
 
     def _on_press(key):
+        global _last_esc_time
         if key == pynput.keyboard.Key.esc:
-            print("\n\n🛑  ESC PRESSED — HARD KILLING PROCESS")
-            os._exit(0)
+            now = time.time()
+            if now - _last_esc_time < 2.0:
+                print("\n\n🛑  ESC DOUBLE-PRESSED — HARD KILLING PROCESS IMMEDIATELY!")
+                os._exit(0)
+            else:
+                _last_esc_time = now
+                print("\n\n🛑  ESC PRESSED — Requesting graceful save and exit...")
+                print("💡 (Press ESC again within 2 seconds to force close without saving)")
+                _thread.interrupt_main()
 
     listener = pynput.keyboard.Listener(on_press=_on_press)
     listener.daemon = True
     listener.start()
-    print("🔑  ESC kill-switch armed (press ESC to terminate immediately)")
+    print("🔑  ESC kill-switch armed (press ESC to terminate; double-press to hard exit)")
 
 
 class InputController:
