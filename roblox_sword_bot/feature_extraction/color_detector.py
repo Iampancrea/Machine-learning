@@ -108,27 +108,51 @@ class GameDetector:
 
     def detect_kill_log(self, frame: np.ndarray) -> dict:
         """
-        Detect kill/death events by reading the kill log text at the bottom-right.
+        Detect kill/death events by reading the kill log text at the bottom-right
+        of the FULL SCREEN (not the 800x600 centered capture, which doesn't reach
+        the bottom-right corner).
         
         Kill log format in this game:
-            "[killer] stole [amount] from [victim] [distance] away"
+            "[killer] stole [amount] [clock icon] from [victim] [distance] studs away"
         
         Returns:
             dict with keys 'kill' (bool), 'death' (bool), 'killer' (str), 'victim' (str)
         """
-        h, w = frame.shape[:2]
+        import mss
         
-        # Kill log is at the bottom-right corner of the screen
-        # Grab the bottom 80 pixels, right half of the screen
-        roi = frame[h - 80:h, w // 2:w]
+        default_result = {'kill': False, 'death': False, 'killer': '', 'victim': ''}
+        
+        try:
+            with mss.mss() as sct:
+                # Grab the bottom-right corner of the primary monitor
+                # Kill log occupies roughly bottom 150px, right 60% of screen
+                monitor = sct.monitors[1]  # Primary monitor
+                screen_w = monitor["width"]
+                screen_h = monitor["height"]
+                
+                kill_log_region = {
+                    "left": monitor["left"] + int(screen_w * 0.4),
+                    "top": monitor["top"] + screen_h - 150,
+                    "width": int(screen_w * 0.6),
+                    "height": 150
+                }
+                
+                screenshot = sct.grab(kill_log_region)
+                roi = np.array(screenshot)[:, :, :3]  # Drop alpha, keep BGR
+                roi = cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
+        except Exception as e:
+            return default_result
         
         # Run OCR on the kill log region
         try:
             results = self.reader.readtext(roi, detail=0)
             text_full = " ".join(results).lower()
         except Exception:
-            return {'kill': False, 'death': False, 'killer': '', 'victim': ''}
+            return default_result
         
+        if not text_full.strip():
+            return default_result
+            
         player_name = "sagupaam6"
         
         result = {'kill': False, 'death': False, 'killer': '', 'victim': ''}
@@ -136,7 +160,6 @@ class GameDetector:
         # Check if we killed someone: "sagupaam6 stole ... from [victim]"
         if f"{player_name} stole" in text_full:
             result['kill'] = True
-            # Try to extract victim name: everything after "from " until next space or end
             try:
                 after_from = text_full.split(f"{player_name} stole")[1]
                 if "from " in after_from:
@@ -148,11 +171,15 @@ class GameDetector:
         # Check if someone killed us: "[killer] stole ... from sagupaam6"
         if f"from {player_name}" in text_full:
             result['death'] = True
-            # Try to extract killer name: everything before "stole"
             try:
-                before_stole = text_full.split("stole")[0].strip()
-                # The killer name is the last word(s) before "stole"
-                result['killer'] = before_stole.split()[-1] if before_stole else 'someone'
+                # Find the line containing "from sagupaam6"
+                for line in text_full.split("\n"):
+                    if f"from {player_name}" in line and "stole" in line:
+                        killer = line.split("stole")[0].strip().split()[-1] if line.split("stole")[0].strip() else 'someone'
+                        result['killer'] = killer
+                        break
+                if not result['killer']:
+                    result['killer'] = 'someone'
             except (IndexError, ValueError):
                 result['killer'] = 'someone'
         
