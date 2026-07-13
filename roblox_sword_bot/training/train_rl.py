@@ -148,7 +148,11 @@ class RLTrainer:
                 str(latest_checkpoint),
                 env=env,
                 device=device,
-                custom_objects={"policy_kwargs": policy_kwargs}
+                custom_objects={
+                    "learning_rate": rl_config.get('learning_rate', 0.00003),
+                    "n_steps": rl_config.get('steps_per_episode', 256),
+                    "policy_kwargs": policy_kwargs
+                }
             )
         else:
             print("\n🧠 Initializing PPO Agent from scratch...")

@@ -99,6 +99,8 @@ class RobloxGymEnv(gym.Env):
         
         if len(parts) >= 5:
             keys = parts[0].split(',') if parts[0] and parts[0] != 'none' else []
+            # Strip out '1' or 'KEY.1' to prevent unequipping the sword during fight
+            keys = [k for k in keys if k not in ['1', 'KEY.1']]
             click_left = parts[1] == '1'
             click_right = parts[2] == '1'
             mouse_dx = int(parts[3])
@@ -118,6 +120,25 @@ class RobloxGymEnv(gym.Env):
         super().reset(seed=seed)
         self.feature_engineer.reset()
         self.input_controller.reset()
+        
+        # Wait for respawn: if death is detected, wait until it is no longer detected
+        if self.game_detector.detect_death():
+            print("⏳ Player is dead/respawning. Waiting for respawn...")
+            # Sleep to let Roblox handle the respawn animation
+            time.sleep(2.0)
+            # Wait until health bar is healthy again (template match is low)
+            start_wait = time.time()
+            while self.game_detector.detect_death():
+                time.sleep(0.5)
+                # Failsafe: don't loop forever if Roblox crashed or something
+                if time.time() - start_wait > 12.0:
+                    print("⚠️ Respawn wait timed out (12s). Resuming anyway.")
+                    break
+            print("✅ Respawn detected. Equipping sword...")
+            time.sleep(1.0) # Wait for character to settle
+            
+        # Ensure sword is equipped on spawn/respawn
+        self.input_controller.press_key('1', duration=0.15)
         
         self.is_dead = False
         self.kill_cooldown = 0
