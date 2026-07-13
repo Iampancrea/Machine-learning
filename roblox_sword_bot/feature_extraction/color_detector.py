@@ -102,35 +102,18 @@ class GameDetector:
         Returns:
             dict with keys 'kill' (bool), 'death' (bool), 'killer' (str), 'victim' (str)
         """
-        import mss
         
         default_result = {'kill': False, 'death': False, 'killer': '', 'victim': ''}
         
         if not self.use_ocr or self.reader is None:
             return default_result
             
-        try:
-            with mss.mss() as sct:
-                # Grab the bottom-right corner of the primary monitor
-                # Kill log occupies roughly bottom 150px, right 60% of screen
-                monitor = sct.monitors[1]  # Primary monitor
-                screen_w = monitor["width"]
-                screen_h = monitor["height"]
-                
-                kill_log_region = {
-                    "left": monitor["left"] + int(screen_w * 0.4),
-                    "top": monitor["top"] + screen_h - 150,
-                    "width": int(screen_w * 0.6),
-                    "height": 150
-                }
-                
-                screenshot = sct.grab(kill_log_region)
-                roi = np.array(screenshot)[:, :, :3]  # Drop alpha, keep BGR
-                roi = cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
-        except Exception as e:
-            return default_result
+        # Instead of using mss to capture the absolute screen (which captures the Windows taskbar 
+        # if the game is windowed), we use the actual game frame passed into the function!
+        # The game frame is RGB.
+        roi = frame
         
-        # Run OCR on the kill log region
+        # Run OCR on the frame
         try:
             results = self.reader.readtext(roi, detail=0)
             text_full = " ".join(results).lower()
@@ -171,7 +154,9 @@ class GameDetector:
                 result['killer'] = 'someone'
         
         if result['kill'] or result['death']:
-            print(f"    [OCR] Read: '{text_full}'")
+            print(f"    [OCR] Read match: '{text_full}'")
+        elif player_name in text_full:
+            print(f"    [OCR] Saw your name, but didn't match kill/death pattern: '{text_full}'")
         
         return result
 
