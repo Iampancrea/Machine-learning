@@ -140,16 +140,11 @@ class RobloxGymEnv(gym.Env):
         action_dict = self._decode_action(int(action_idx))
         self.input_controller.execute_action(action_dict)
         
-        # Log ALL actions so we can see what keys the bot is actually pressing
-        keys_str = '+'.join(action_dict['keys']) if action_dict['keys'] else 'none'
-        click_str = 'M1' if action_dict.get('click_left') else ''
-        if keys_str != 'none' or click_str:
-            print(f"  [Step {self.step_count}] Keys: {keys_str} {click_str}")
-        
         # 2. Get New State
         frame = self.screen_capture.capture()
         enemies = self.game_detector.detect_enemies(frame)
         in_safe_zone = self.game_detector.detect_safe_zone(frame)
+        player_health = self.game_detector.detect_player_health(frame)
         
         # Extract features for NN
         struct, cnn = self.feature_engineer.extract_features(frame, enemies, in_safe_zone)
@@ -169,14 +164,6 @@ class RobloxGymEnv(gym.Env):
         if self.step_count % 30 == 0:
             kill_log_status = self.game_detector.detect_kill_log(frame)
             
-            # Check for death (someone killed us)
-            if kill_log_status['death'] and not self.is_dead:
-                reward -= 10.0
-                terminated = True
-                self.is_dead = True
-                killer = kill_log_status.get('killer', 'unknown')
-                print(f"\n☠️ KILLED BY: {killer} (-10 Penalty) [Step {self.step_count}]\n")
-            
             # Check for kill (we killed someone) with cooldown
             if self.kill_cooldown > 0:
                 self.kill_cooldown -= 1
@@ -186,6 +173,27 @@ class RobloxGymEnv(gym.Env):
                 self.kill_cooldown = 3  # 3 OCR checks = ~3 seconds cooldown
                 victim = kill_log_status.get('victim', 'unknown')
                 print(f"\n🩸 KILL! You killed: {victim} (+10 Reward) [Step {self.step_count}]\n")
+                
+            # Check OCR for death if we missed the health drop
+            if kill_log_status['death'] and not self.is_dead:
+                reward -= 10.0
+                terminated = True
+                self.is_dead = True
+                killer = kill_log_status.get('killer', 'unknown')
+                print(f"\n☠️ KILLED BY: {killer} (-10 Penalty) [Step {self.step_count}]\n")
+                
+        # Check health for absolute death (falling in void or unlogged deaths)
+        if not self.is_dead and player_health < 0.05:
+            reward -= 10.0
+            terminated = True
+            self.is_dead = True
+            print(f"\n☠️ DIED! (Fell in void or killed) (-10 Penalty) [Step {self.step_count}]\n")
+            
+        elif player_health > 0.8:
+            # Respawned!
+            self.is_dead = False
+            
+        self.last_player_health = player_health
             
         # Distance tracking logic (hunt reward / cowardice penalty)
         if enemies:
