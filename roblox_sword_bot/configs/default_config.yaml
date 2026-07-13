@@ -1,6 +1,6 @@
 # Configuration for Roblox Sword Fight Bot
 # Hybrid architecture: GameDetector + CNN spatial awareness
-# NO OCR — CNN branch handles UI/spatial pattern recognition
+# Resolution: 1536x888 fullscreen
 
 # Hardware settings
 hardware:
@@ -14,12 +14,14 @@ capture:
   resolution: [800, 600]  # Strict bounding box captured at OS level (no resize)
   fps: 30  # Target capture FPS
   region: null  # null = centered 800x600 box, or [left, top, width, height]
+  # For 1536x888 fullscreen, centered 800x600 = {left: 368, top: 144}
+  screen_resolution: [1536, 888]  # Your actual Roblox fullscreen resolution
 
 # Feature extraction settings
 features:
   use_color_detection: true
   use_geometric_anchoring: true
-  use_ocr: false  # DISABLED — CNN branch handles spatial/UI awareness
+  use_ocr: true  # ENABLED — needed for kill log tracking
   feature_history_length: 10  # Number of past frames to consider
   cnn_resolution: [80, 60]  # Width x Height for CNN input frame (grayscale)
   
@@ -41,12 +43,47 @@ features:
     white_threshold: 200  # Min value in all RGB channels to count as "white"
     min_white_ratio: 0.03  # At least 3% white pixels in text ROI
   
-  # Safe zone detection (static ROI at top-center)
+  # Kill log detection (OCR on bottom-right of FULL SCREEN)
   kill_log:
     enabled: true
-    box: [280, 20, 400, 150]  # [x, y, w, h] roughly top right
-    confidence_threshold: 0.6
     player_name: "sagupaam6"  # Your Roblox username for kill detection
+    # Absolute screen coordinates for the kill log ROI (bottom-right corner)
+    # For 1536x888 fullscreen: last ~98px of height, right ~70% of width
+    screen_region: [350, 795, 1186, 93]  # [left, top, width, height]
+    confidence_threshold: 0.4
+    scan_interval_frames: 15  # OCR every 15 frames (~0.5 sec at 30fps)
+    dedup_timeout_seconds: 4.0  # Ignore duplicate kill log lines within this window
+
+  # Player death detection (health bar in top-right corner)
+  death_detection:
+    enabled: true
+    # Absolute screen coordinates for the health bar ROI (top-right corner)
+    # On 1536x888: the grey rounded bar when dead
+    screen_region: [1380, 3, 150, 32]  # [left, top, width, height]
+    # When dead, the bar is grey (low saturation, medium value)
+    grey_saturation_threshold: 30  # Max saturation to count as "grey"
+    grey_value_min: 60   # Min value for grey (not black)
+    grey_value_max: 180  # Max value for grey (not white)
+    grey_pixel_ratio: 0.40  # At least 40% grey pixels = dead
+
+  # Enemy detection via green HP text nametags
+  enemy_detection:
+    enabled: true
+    # HSV range for the bright green "100 HP" text above enemy heads
+    hp_text_hsv_lower: [35, 80, 150]
+    hp_text_hsv_upper: [85, 255, 255]
+    # Contour filtering
+    min_contour_area: 15       # Minimum pixel area for a valid HP text blob
+    max_contour_area: 8000     # Maximum pixel area (filter out green floor tiles)
+    min_aspect_ratio: 1.2      # HP text is wider than tall
+    max_aspect_ratio: 20.0     # Not absurdly wide (noise)
+    # Spatial filtering (relative to 800x600 capture frame)
+    exclude_bottom_ratio: 0.35  # Ignore bottom 35% (green floor tiles)
+    exclude_top_ratio: 0.05     # Ignore top 5% (safe zone banner)
+    # Clustering: merge nearby green blobs into a single enemy
+    cluster_distance_px: 50     # Max pixel distance to merge blobs
+
+  # Safe zone detection (static ROI at top-center)
   safe_zone:
     roi: [150, 5, 500, 45]  # [x, y, width, height] relative to 800x600 capture
     banner_red_lower_1: [0, 120, 150]
@@ -88,13 +125,11 @@ reinforcement_learning:
   
 # Rewards configuration
 rewards:
-  damage_dealt: 1.0
-  damage_taken: -0.5
-  kill: 5.0
-  death: -2.0
-  distance_to_enemy: -0.01  # Reward for getting closer
-  successful_hit: 2.0
-  missed_hit: -0.5
+  kill: 10.0           # Successfully killed another player
+  death: -10.0         # Got killed by another player
+  safe_zone_penalty: -0.05  # Per-step penalty for camping in safe zone
+  near_enemy_bonus: 0.02    # Per-step bonus when enemies are visible
+  idle_penalty: -0.01       # Per-step penalty for doing nothing
 
 # Action space
 actions:

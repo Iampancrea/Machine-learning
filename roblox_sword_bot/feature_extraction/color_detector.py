@@ -1,23 +1,23 @@
 """
-GameDetector — HSV color segmentation + geometric anchoring for Roblox
-sword-fight bot detection.  No OCR, no template matching, just raw pixel
-math the way the silicon gods intended.
+GameDetector — Full game-state detection suite for Roblox sword-fight bot.
 
 Detection pipeline:
-    1. detect_health_bars  — find red/green HP bars via HSV masks + shape filter
-    2. confirm_enemies     — anchor each bar to a player by requiring white
-                             username text directly below it
-    3. detect_safe_zone    — check a static ROI for the red/yellow banner
+    1. detect_enemies      — HSV green "HP" text detection + contour clustering
+    2. detect_safe_zone    — static ROI color check for safe zone banner
+    3. detect_kill_log     — OCR on kill log region (bottom-right of full screen)
+    4. detect_death        — health bar greying detection (top-right of full screen)
 
 Frame assumptions:
-    • 800×600 RGB input (numpy uint8 array, channel order RGB)
-    • Health bars are thin horizontal rectangles floating above heads
-    • Usernames are white text rendered immediately below the bar
+    • 800×600 RGB input for detect_enemies/detect_safe_zone (centered capture)
+    • Full screen (1536×888) grabs via mss for kill_log and death detection
 """
 
 import numpy as np
 import cv2
+import mss
+import time
 from typing import List, Tuple, Optional
+from collections import deque
 
 try:
     import easyocr
@@ -27,148 +27,405 @@ except ImportError:
 
 
 class GameDetector:
-    """Detect enemies and game-state elements in a Roblox sword-fight
-    game using HSV color segmentation and geometric filtering."""
+    """Detect enemies, kills, deaths, and game-state elements in a Roblox
+    sword-fight game using HSV color segmentation, contour analysis, and
+    targeted OCR."""
 
     def __init__(self, config: dict = None):
         """
         Args:
-            config: Optional dict to override any default thresholds.
+            config: Full config dict (the whole YAML).
                     Unrecognised keys are silently ignored.
         """
         cfg = config or {}
+        features_cfg = cfg.get('features', {})
 
-        # ── Health-bar HSV ranges ────────────────────────────────────
-        # Green portion of the bar
+        # ── Health-bar HSV ranges (legacy, kept for compatibility) ────
         self.green_lower = np.array(cfg.get("green_lower", [35, 80, 80]))
         self.green_upper = np.array(cfg.get("green_upper", [85, 255, 255]))
-
-        # Red wraps around the hue wheel → two ranges
         self.red_lower1 = np.array(cfg.get("red_lower1", [0, 80, 80]))
         self.red_upper1 = np.array(cfg.get("red_upper1", [10, 255, 255]))
         self.red_lower2 = np.array(cfg.get("red_lower2", [170, 80, 80]))
         self.red_upper2 = np.array(cfg.get("red_upper2", [180, 255, 255]))
 
-        # ── Geometric constraints for a valid health bar ─────────────
+        # ── Geometric constraints (legacy) ───────────────────────────
         self.min_bar_width: int = cfg.get("min_bar_width", 20)
         self.max_bar_width: int = cfg.get("max_bar_width", 150)
         self.max_bar_height: int = cfg.get("max_bar_height", 12)
         self.min_aspect_ratio: float = cfg.get("min_aspect_ratio", 3.0)
 
         # ── Safe-zone banner ROI (relative to 800×600 frame) ────────
+        sz_cfg = features_cfg.get('safe_zone', {})
         self.safe_zone_roi: Tuple[int, int, int, int] = tuple(
-            cfg.get("safe_zone_roi", (150, 5, 500, 45))
-        )  # (x, y, w, h)
+            sz_cfg.get("roi", (150, 5, 500, 45))
+        )
+        self.banner_red_lower1 = np.array(sz_cfg.get("banner_red_lower_1", [0, 120, 150]))
+        self.banner_red_upper1 = np.array(sz_cfg.get("banner_red_upper_1", [10, 255, 255]))
+        self.banner_red_lower2 = np.array(sz_cfg.get("banner_red_lower_2", [170, 120, 150]))
+        self.banner_red_upper2 = np.array(sz_cfg.get("banner_red_upper_2", [180, 255, 255]))
+        self.banner_yellow_lower = np.array(sz_cfg.get("banner_yellow_lower", [15, 120, 150]))
+        self.banner_yellow_upper = np.array(sz_cfg.get("banner_yellow_upper", [35, 255, 255]))
 
-        # Banner HSV — red component
-        self.banner_red_lower1 = np.array(cfg.get("banner_red_lower1", [0, 120, 150]))
-        self.banner_red_upper1 = np.array(cfg.get("banner_red_upper1", [10, 255, 255]))
-        self.banner_red_lower2 = np.array(cfg.get("banner_red_lower2", [170, 120, 150]))
-        self.banner_red_upper2 = np.array(cfg.get("banner_red_upper2", [180, 255, 255]))
-
-        # Banner HSV — yellow component
-        self.banner_yellow_lower = np.array(cfg.get("banner_yellow_lower", [15, 120, 150]))
-        self.banner_yellow_upper = np.array(cfg.get("banner_yellow_upper", [35, 255, 255]))
-
-        # ── White-text confirmation thresholds ───────────────────────
+        # ── White-text confirmation thresholds (legacy) ──────────────
         self.white_threshold: int = cfg.get("white_threshold", 200)
         self.text_confirm_ratio: float = cfg.get("text_confirm_ratio", 0.03)
 
-        # ── OCR Reader for Kill Log ────────────────────────────────────
-        self.use_ocr = cfg.get("features", {}).get("use_ocr", False)
+        # ── Player name ──────────────────────────────────────────────
+        kl_cfg = features_cfg.get('kill_log', {})
+        self.player_name = kl_cfg.get("player_name", "sagupaam6").lower()
+
+        # ── Kill Log OCR Setup ───────────────────────────────────────
+        self.use_ocr = features_cfg.get("use_ocr", False)
         self.reader = None
         if self.use_ocr:
             if EASYOCR_AVAILABLE:
-                print("Initializing EasyOCR for Kill Log tracking... (this might take a second)")
+                print("🔤 Initializing EasyOCR for Kill Log tracking...")
                 use_gpu = cfg.get("hardware", {}).get("use_gpu", False)
                 self.reader = easyocr.Reader(['en'], gpu=use_gpu, verbose=False)
+                print("✅ EasyOCR ready.")
             else:
-                print("WARNING: easyocr is enabled in config but not installed! Disabling OCR features.")
+                print("⚠️  easyocr not installed! Disabling OCR. pip install easyocr")
                 self.use_ocr = False
-                
-        self.player_name = cfg.get("features", {}).get("kill_log", {}).get("player_name", "sagupaam6")
 
-    # ── Kill Log OCR ─────────────────────────────────────────────────
-    
-    def detect_kill_log(self, frame: np.ndarray) -> dict:
+        # Kill log screen region (absolute coordinates on the full screen)
+        self.kill_log_region = kl_cfg.get("screen_region", [350, 795, 1186, 93])
+        self.kill_log_confidence = kl_cfg.get("confidence_threshold", 0.4)
+        self.kill_log_dedup_timeout = kl_cfg.get("dedup_timeout_seconds", 4.0)
+
+        # Deduplication: track recently seen kill/death events
+        # Each entry is (event_text_hash, timestamp)
+        self._recent_events: deque = deque(maxlen=20)
+
+        # ── Death Detection Setup ────────────────────────────────────
+        dd_cfg = features_cfg.get('death_detection', {})
+        self.death_detection_enabled = dd_cfg.get("enabled", True)
+        self.death_bar_region = dd_cfg.get("screen_region", [1380, 3, 150, 32])
+        self.grey_sat_threshold = dd_cfg.get("grey_saturation_threshold", 30)
+        self.grey_val_min = dd_cfg.get("grey_value_min", 60)
+        self.grey_val_max = dd_cfg.get("grey_value_max", 180)
+        self.grey_pixel_ratio = dd_cfg.get("grey_pixel_ratio", 0.40)
+
+        # ── Enemy Detection Setup ────────────────────────────────────
+        ed_cfg = features_cfg.get('enemy_detection', {})
+        self.enemy_detection_enabled = ed_cfg.get("enabled", True)
+        self.hp_hsv_lower = np.array(ed_cfg.get("hp_text_hsv_lower", [35, 80, 150]))
+        self.hp_hsv_upper = np.array(ed_cfg.get("hp_text_hsv_upper", [85, 255, 255]))
+        self.ed_min_area = ed_cfg.get("min_contour_area", 15)
+        self.ed_max_area = ed_cfg.get("max_contour_area", 8000)
+        self.ed_min_aspect = ed_cfg.get("min_aspect_ratio", 1.2)
+        self.ed_max_aspect = ed_cfg.get("max_aspect_ratio", 20.0)
+        self.ed_exclude_bottom = ed_cfg.get("exclude_bottom_ratio", 0.35)
+        self.ed_exclude_top = ed_cfg.get("exclude_top_ratio", 0.05)
+        self.ed_cluster_dist = ed_cfg.get("cluster_distance_px", 50)
+
+        # mss instance for separate screen captures (kill log, health bar)
+        self._sct = mss.MSS()
+
+    # ─────────────────────────────────────────────────────────────────
+    # Kill Log OCR (grabs its own ROI from the full screen)
+    # ─────────────────────────────────────────────────────────────────
+    def detect_kill_log(self, frame: np.ndarray = None) -> dict:
         """
-        Detect kill/death events by reading the kill log text at the bottom-right
-        of the FULL SCREEN (not the 800x600 centered capture, which doesn't reach
-        the bottom-right corner).
-        
-        Kill log format in this game:
-            "[killer] stole [amount] [clock icon] from [victim] [distance] studs away"
-        
+        Detect kill/death events by reading the kill log at the bottom-right
+        of the FULL SCREEN (separate from the 800x600 game capture).
+
+        Kill log format:
+            "[killer] stole [amount] 🕐 from [victim] [N] studs away"
+
         Returns:
-            dict with keys 'kill' (bool), 'death' (bool), 'killer' (str), 'victim' (str)
+            dict with keys:
+                'kill'   (bool) — we killed someone
+                'death'  (bool) — someone killed us
+                'killer' (str)  — who killed us
+                'victim' (str)  — who we killed
         """
-        
         default_result = {'kill': False, 'death': False, 'killer': '', 'victim': ''}
-        
+
         if not self.use_ocr or self.reader is None:
             return default_result
-            
-        # Instead of using mss to capture the absolute screen (which captures the Windows taskbar 
-        # if the game is windowed), we use the actual game frame passed into the function!
-        # The game frame is RGB.
-        roi = frame
-        
-        # Run OCR on the frame
+
         try:
-            results = self.reader.readtext(roi, detail=0)
-            text_full = " ".join(results).lower()
-        except Exception:
+            # Grab kill log ROI from absolute screen coordinates
+            region = self.kill_log_region
+            monitor = {
+                "left": region[0],
+                "top": region[1],
+                "width": region[2],
+                "height": region[3],
+            }
+            screenshot = self._sct.grab(monitor)
+            roi = np.array(screenshot)[:, :, :3]  # Drop alpha (BGRA → BGR)
+
+            # Pre-process: the kill log has white/colored text on a semi-dark bg
+            # Convert to grayscale and threshold to isolate bright text
+            gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+            _, thresh = cv2.threshold(gray, 160, 255, cv2.THRESH_BINARY)
+
+            # Run EasyOCR on the small pre-processed crop (MUCH faster than full frame)
+            results = self.reader.readtext(thresh, detail=0, paragraph=True)
+            text_full = " ".join(results).lower().strip()
+
+        except Exception as e:
             return default_result
-        
-        if not text_full.strip():
+
+        if not text_full:
             return default_result
-            
-        player_name = self.player_name
-        
+
         result = {'kill': False, 'death': False, 'killer': '', 'victim': ''}
-        
-        # Check if we killed someone: "sagupaam6 stole ... from [victim]"
-        if f"{player_name} stole" in text_full:
+        player = self.player_name
+
+        # Generate a simple hash of the text for deduplication
+        text_hash = hash(text_full)
+        now = time.time()
+
+        # Purge old events
+        while self._recent_events and (now - self._recent_events[0][1]) > self.kill_log_dedup_timeout:
+            self._recent_events.popleft()
+
+        # Check if we already processed this exact text recently
+        recent_hashes = {h for h, _ in self._recent_events}
+        if text_hash in recent_hashes:
+            return default_result
+
+        # ── Parse kill events ────────────────────────────────────────
+        # "sagupaam6 stole 500 from [victim]"
+        if f"{player} stole" in text_full or f"{player} st" in text_full:
             result['kill'] = True
             try:
-                after_from = text_full.split(f"{player_name} stole")[1]
-                if "from " in after_from:
-                    victim = after_from.split("from ")[1].split(" ")[0]
-                    result['victim'] = victim
+                after_stole = text_full.split(f"{player} stole" if f"{player} stole" in text_full else f"{player} st")[1]
+                if "from " in after_stole:
+                    victim_raw = after_stole.split("from ")[1].strip()
+                    # Victim name is the first word after "from"
+                    result['victim'] = victim_raw.split()[0] if victim_raw.split() else 'someone'
+                else:
+                    result['victim'] = 'someone'
             except (IndexError, ValueError):
                 result['victim'] = 'someone'
-            
-        # Check if someone killed us: "[killer] stole ... from sagupaam6"
-        if f"from {player_name}" in text_full:
+
+        # ── Parse death events ───────────────────────────────────────
+        # "[killer] stole 500 from sagupaam6"
+        if f"from {player}" in text_full or f"from {player[:6]}" in text_full:
             result['death'] = True
             try:
-                # Find the line containing "from sagupaam6"
-                for line in text_full.split("\n"):
-                    if f"from {player_name}" in line and "stole" in line:
-                        killer = line.split("stole")[0].strip().split()[-1] if line.split("stole")[0].strip() else 'someone'
-                        result['killer'] = killer
-                        break
-                if not result['killer']:
+                # Find the text before "stole" to get killer name
+                match_str = f"from {player}" if f"from {player}" in text_full else f"from {player[:6]}"
+                lines = text_full.split(match_str)
+                if lines[0]:
+                    before_from = lines[0]
+                    if "stole" in before_from or "st" in before_from:
+                        split_word = "stole" if "stole" in before_from else "st"
+                        killer_part = before_from.split(split_word)[0].strip()
+                        words = killer_part.split()
+                        result['killer'] = words[-1] if words else 'someone'
+                    else:
+                        words = before_from.strip().split()
+                        result['killer'] = words[-1] if words else 'someone'
+                else:
                     result['killer'] = 'someone'
             except (IndexError, ValueError):
                 result['killer'] = 'someone'
-        
+
+        # Store event for deduplication
         if result['kill'] or result['death']:
-            print(f"    [OCR] Read match: '{text_full}'")
-        elif player_name in text_full:
-            print(f"    [OCR] Saw your name, but didn't match kill/death pattern: '{text_full}'")
-        
+            self._recent_events.append((text_hash, now))
+            print(f"    [OCR] Kill log text: '{text_full}'")
+
         return result
 
     # ─────────────────────────────────────────────────────────────────
-    # Enemy Detection (Disabled)
+    # Death Detection (health bar greying out in top-right corner)
+    # ─────────────────────────────────────────────────────────────────
+    def detect_death(self) -> bool:
+        """
+        Detect if the player is dead by checking if the health bar in the
+        top-right corner has greyed out.
+
+        When alive: health bar has color (green/red with high saturation)
+        When dead:  health bar is grey (low saturation, medium value)
+
+        Returns:
+            True if the player appears to be dead.
+        """
+        if not self.death_detection_enabled:
+            return False
+
+        try:
+            region = self.death_bar_region
+            monitor = {
+                "left": region[0],
+                "top": region[1],
+                "width": region[2],
+                "height": region[3],
+            }
+            screenshot = self._sct.grab(monitor)
+            roi = np.array(screenshot)[:, :, :3]  # BGRA → BGR
+
+            # Convert to HSV for saturation analysis
+            hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+
+            # Count "grey" pixels: low saturation, medium value
+            sat = hsv[:, :, 1]  # Saturation channel
+            val = hsv[:, :, 2]  # Value channel
+
+            grey_mask = (
+                (sat < self.grey_sat_threshold) &
+                (val > self.grey_val_min) &
+                (val < self.grey_val_max)
+            )
+
+            grey_ratio = np.count_nonzero(grey_mask) / grey_mask.size
+
+            return grey_ratio > self.grey_pixel_ratio
+
+        except Exception:
+            return False
+
+    # ─────────────────────────────────────────────────────────────────
+    # Enemy Detection (green HP text nametags)
     # ─────────────────────────────────────────────────────────────────
     def detect_enemies(self, frame: np.ndarray) -> List[dict]:
         """
-        Health bars are disabled in this game, so we return an empty list.
-        The bot will rely exclusively on the CNN spatial branch and OCR kill logs.
+        Detect enemy players by finding the bright green "XX HP" text
+        floating above their heads.
+
+        Uses HSV color filtering → contour detection → spatial filtering
+        → clustering to identify individual enemies.
+
+        Args:
+            frame: RGB uint8 image (800×600 centered capture)
+
+        Returns:
+            List of enemy dicts, each with:
+                'player_center': (x, y) — estimated player position
+                'tag_center':    (x, y) — center of HP text
+                'hp_pct':        float  — always 1.0 (can't read exact HP)
+                'hp_bar':        tuple  — bounding rect of the HP text
+                'text_confidence': float — 0.0 (no OCR)
         """
-        return []
+        if not self.enemy_detection_enabled:
+            return []
+
+        height, width = frame.shape[:2]
+
+        # Convert to HSV
+        hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
+
+        # Mask for bright green pixels (the "XX HP" text color)
+        green_mask = cv2.inRange(hsv, self.hp_hsv_lower, self.hp_hsv_upper)
+
+        # Spatial filtering: zero out bottom (green floor) and top (banner)
+        exclude_top_px = int(height * self.ed_exclude_top)
+        exclude_bottom_px = int(height * (1.0 - self.ed_exclude_bottom))
+        green_mask[:exclude_top_px, :] = 0
+        green_mask[exclude_bottom_px:, :] = 0
+
+        # Also exclude leftmost ~20% (UI elements like Kills counter, score)
+        ui_cutoff = int(width * 0.18)
+        green_mask[:, :ui_cutoff] = 0
+
+        # Morphological operations to clean up noise and connect text fragments
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 3))
+        green_mask = cv2.morphologyEx(green_mask, cv2.MORPH_CLOSE, kernel)
+        green_mask = cv2.morphologyEx(green_mask, cv2.MORPH_OPEN,
+                                       cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2)))
+
+        # Find contours
+        contours, _ = cv2.findContours(green_mask, cv2.RETR_EXTERNAL,
+                                        cv2.CHAIN_APPROX_SIMPLE)
+
+        # Filter contours by size and aspect ratio
+        candidates = []
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            if area < self.ed_min_area or area > self.ed_max_area:
+                continue
+
+            x, y, w, h = cv2.boundingRect(cnt)
+            if h == 0:
+                continue
+
+            aspect = w / h
+            if aspect < self.ed_min_aspect or aspect > self.ed_max_aspect:
+                continue
+
+            cx = x + w // 2
+            cy = y + h // 2
+            candidates.append({
+                'center': (cx, cy),
+                'bbox': (x, y, w, h),
+                'area': area,
+            })
+
+        if not candidates:
+            return []
+
+        # Cluster nearby candidates into individual enemies
+        enemies = self._cluster_detections(candidates, frame.shape)
+
+        return enemies
+
+    def _cluster_detections(self, candidates: List[dict],
+                             frame_shape: tuple) -> List[dict]:
+        """
+        Cluster nearby green text detections into individual enemies.
+        Multiple green blobs close together likely belong to the same nametag.
+        """
+        if not candidates:
+            return []
+
+        height, width = frame_shape[:2]
+        max_dist = self.ed_cluster_dist
+
+        # Simple greedy clustering
+        used = set()
+        clusters = []
+
+        # Sort by area (largest first — more likely to be actual HP text)
+        candidates.sort(key=lambda c: c['area'], reverse=True)
+
+        for i, cand in enumerate(candidates):
+            if i in used:
+                continue
+
+            cluster = [cand]
+            used.add(i)
+
+            cx, cy = cand['center']
+
+            for j, other in enumerate(candidates):
+                if j in used:
+                    continue
+                ox, oy = other['center']
+                dist = np.sqrt((cx - ox)**2 + (cy - oy)**2)
+                if dist < max_dist:
+                    cluster.append(other)
+                    used.add(j)
+
+            clusters.append(cluster)
+
+        # Convert clusters to enemy dicts
+        enemies = []
+        for cluster in clusters:
+            # Average center of all blobs in this cluster
+            avg_x = int(np.mean([c['center'][0] for c in cluster]))
+            avg_y = int(np.mean([c['center'][1] for c in cluster]))
+
+            # Bounding rect of the largest blob
+            main = max(cluster, key=lambda c: c['area'])
+            bbox = main['bbox']
+
+            # Player center is estimated ~50px below the HP text
+            player_y = min(avg_y + 50, height - 1)
+
+            enemies.append({
+                'player_center': (avg_x, player_y),
+                'tag_center': (avg_x, avg_y),
+                'hp_pct': 1.0,  # Can't read exact HP without OCR
+                'hp_bar': bbox,
+                'text_confidence': 0.0,
+            })
+
+        return enemies
 
     def get_nearest_enemy(
         self,
@@ -247,15 +504,14 @@ if __name__ == "__main__":
     print("╔══════════════════════════════════════════════╗")
     print("║        GameDetector — Configuration          ║")
     print("╠══════════════════════════════════════════════╣")
-    print(f"║  Green HSV       : {det.green_lower.tolist()} → {det.green_upper.tolist()}")
-    print(f"║  Red HSV (low)   : {det.red_lower1.tolist()} → {det.red_upper1.tolist()}")
-    print(f"║  Red HSV (high)  : {det.red_lower2.tolist()} → {det.red_upper2.tolist()}")
-    print(f"║  Bar width       : {det.min_bar_width} – {det.max_bar_width} px")
-    print(f"║  Bar max height  : {det.max_bar_height} px")
-    print(f"║  Min aspect ratio: {det.min_aspect_ratio}")
+    print(f"║  OCR enabled     : {det.use_ocr}")
+    print(f"║  Player name     : {det.player_name}")
+    print(f"║  Kill log region : {det.kill_log_region}")
+    print(f"║  Death bar region: {det.death_bar_region}")
+    print(f"║  Enemy detection : {det.enemy_detection_enabled}")
+    print(f"║  HP HSV lower    : {det.hp_hsv_lower.tolist()}")
+    print(f"║  HP HSV upper    : {det.hp_hsv_upper.tolist()}")
     print(f"║  Safe-zone ROI   : x={det.safe_zone_roi[0]}, y={det.safe_zone_roi[1]}, "
           f"w={det.safe_zone_roi[2]}, h={det.safe_zone_roi[3]}")
-    print(f"║  White threshold : {det.white_threshold}")
-    print(f"║  Text confirm %  : {det.text_confirm_ratio * 100:.1f}%")
     print("╚══════════════════════════════════════════════╝")
     print("\nColorDetector alias active:", ColorDetector is GameDetector)

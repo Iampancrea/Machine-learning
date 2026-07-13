@@ -60,19 +60,22 @@ def transfer_bc_weights(ppo_model, bc_checkpoint_path: str):
                 policy_state[target_key] = v
                 cnn_transferred += 1
     
-    # 2. Transfer Fusion MLP (Actor) weights
-    # In BC, it's fusion_head.0, fusion_head.2, fusion_head.4 (action output)
-    # In SB3 with net_arch=dict(pi=[128, 64]), it's:
-    #   mlp_extractor.policy_net.0 (matches fusion_head.0)
-    #   mlp_extractor.policy_net.2 (matches fusion_head.2)
-    #   action_net (matches fusion_head.4)
+    # 2. Transfer Actor MLP weights (BC's mlp_head → SB3's policy_net + action_net)
+    # BC HybridNetwork: mlp_head = Linear→ReLU→Dropout→Linear→ReLU→Dropout→Linear
+    # SB3 with net_arch=dict(pi=[128, 64]):
+    #   mlp_extractor.policy_net.0 ↔ mlp_head.0  (features → 128)
+    #   mlp_extractor.policy_net.2 ↔ mlp_head.3  (128 → 64)
+    #   action_net                 ↔ mlp_head.6  (64 → num_actions)
+    # NOTE: HybridNetwork uses 'mlp_head', not 'fusion_head'!
+    # The mlp_head is: Linear→ReLU→Dropout→Linear→ReLU→Dropout→Linear
+    # Indices: 0=Linear, 1=ReLU, 2=Dropout, 3=Linear, 4=ReLU, 5=Dropout, 6=Linear
     mlp_map = {
-        'fusion_head.0.weight': 'mlp_extractor.policy_net.0.weight',
-        'fusion_head.0.bias': 'mlp_extractor.policy_net.0.bias',
-        'fusion_head.2.weight': 'mlp_extractor.policy_net.2.weight',
-        'fusion_head.2.bias': 'mlp_extractor.policy_net.2.bias',
-        'fusion_head.4.weight': 'action_net.weight',
-        'fusion_head.4.bias': 'action_net.bias'
+        'mlp_head.0.weight': 'mlp_extractor.policy_net.0.weight',
+        'mlp_head.0.bias': 'mlp_extractor.policy_net.0.bias',
+        'mlp_head.3.weight': 'mlp_extractor.policy_net.2.weight',
+        'mlp_head.3.bias': 'mlp_extractor.policy_net.2.bias',
+        'mlp_head.6.weight': 'action_net.weight',
+        'mlp_head.6.bias': 'action_net.bias'
     }
     
     mlp_transferred = 0
