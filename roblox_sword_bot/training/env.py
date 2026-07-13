@@ -52,7 +52,7 @@ class RobloxGymEnv(gym.Env):
         self.observation_space = spaces.Dict({
             "structured": spaces.Box(
                 low=-np.inf, high=np.inf, 
-                shape=(feature_history * 15,), 
+                shape=(self.feature_engineer.get_structured_dim(),), 
                 dtype=np.float32
             ),
             "cnn_frame": spaces.Box(
