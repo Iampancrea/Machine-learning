@@ -67,6 +67,9 @@ class RobloxGymEnv(gym.Env):
         self.last_player_health = 1.0
         self.last_enemy_health = 1.0
         
+        self.is_dead = False
+        self.kill_cooldown = 0
+        
     def _decode_action(self, action_idx: int) -> dict:
         """Convert integer action from PPO to our standard input dictionary"""
         action_str = self.reverse_action_mapping.get(action_idx, "none_0_0_0_0")
@@ -97,6 +100,9 @@ class RobloxGymEnv(gym.Env):
         self.last_enemy_dist = None
         self.last_player_health = 1.0
         self.last_enemy_health = 1.0
+        
+        self.is_dead = False
+        self.kill_cooldown = 0
         
         # Get initial observation
         frame = self.screen_capture.capture()
@@ -146,17 +152,27 @@ class RobloxGymEnv(gym.Env):
         truncated = False
         
         # Penalty for player damage or death
-        if player_health < self.last_player_health:
-            reward -= 5.0
-            print(f"💀 DAMAGE TAKEN! Health dropped to {player_health:.2f} (-5 Penalty)")
-            if player_health < 0.1:
-                terminated = True
-                print(f"☠️ DIED! Episode terminated.")
+        if not self.is_dead:
+            if player_health < self.last_player_health:
+                reward -= 5.0
+                print(f"💀 DAMAGE TAKEN! Health dropped to {player_health:.2f} (-5 Penalty)")
+                if player_health < 0.1:
+                    terminated = True
+                    self.is_dead = True
+                    print(f"☠️ DIED! Episode terminated.")
+        elif player_health > 0.8:
+            # Respawned!
+            self.is_dead = False
+            
         self.last_player_health = player_health
         
-        # Huge reward for a kill
-        if kill_log_detected:
+        # Huge reward for a kill (with 3 second cooldown at 30fps = 90 frames)
+        if self.kill_cooldown > 0:
+            self.kill_cooldown -= 1
+            
+        if kill_log_detected and self.kill_cooldown == 0:
             reward += 10.0
+            self.kill_cooldown = 90 # Wait 90 frames (3 seconds) before allowing another kill reward
             print("🩸 KILL CONFIRMED! ⏰ (+10 Reward)")
             
         # Distance tracking logic (hunt reward / cowardice penalty)
