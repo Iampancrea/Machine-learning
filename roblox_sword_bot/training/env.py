@@ -91,6 +91,7 @@ class RobloxGymEnv(gym.Env):
         self.episode_deaths = 0
         self.episode_reward = 0.0
         self.last_action = None
+        self.show_vision = config.get("debug_vision", True)
         
     def _decode_action(self, action_idx: int) -> dict:
         """Convert integer action from PPO to our standard input dictionary"""
@@ -262,6 +263,27 @@ class RobloxGymEnv(gym.Env):
                       f"Safe: {in_safe_zone} | Reward: {self.episode_reward:.2f} | "
                       f"Kills: {self.episode_kills}")
                       
+            if getattr(self, 'show_vision', False):
+                import cv2
+                debug_frame = frame.copy()
+                for enemy in enemies:
+                    px, py = enemy['player_center']
+                    cv2.circle(debug_frame, (px, py), 5, (0, 255, 0), -1)
+                    if isinstance(enemy['hp_bar'], (tuple, list, tuple)) and len(enemy['hp_bar']) == 4:
+                        x, y, w, h = enemy['hp_bar']
+                        cv2.rectangle(debug_frame, (x, y), (x + w, y + h), (0, 0, 255), 2)
+                    cv2.putText(debug_frame, "Enemy", (px + 10, py), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                
+                # Shrink it so it doesn't cover the whole screen (1/3rd size)
+                dh, dw = debug_frame.shape[:2]
+                debug_frame = cv2.resize(debug_frame, (dw // 3, dh // 3))
+                cv2.putText(debug_frame, "AI VISION FEED", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 255), 2)
+                
+                bgr_frame = cv2.cvtColor(debug_frame, cv2.COLOR_RGB2BGR)
+                cv2.imshow("Roblox Bot Vision", bgr_frame)
+                cv2.waitKey(1)
+
             if terminated:
                 break
                 
