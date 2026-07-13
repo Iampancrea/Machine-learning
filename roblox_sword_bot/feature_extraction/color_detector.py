@@ -88,39 +88,8 @@ class GameDetector:
                 
         self.player_name = cfg.get("features", {}).get("kill_log", {}).get("player_name", "sagupaam6")
 
-    # ── Player Health & Kill Log ─────────────────────────────────────
+    # ── Kill Log OCR ─────────────────────────────────────────────────
     
-    def detect_player_health(self, frame: np.ndarray) -> float:
-        """
-        Check the player's own health bar at the top right of the screen.
-        Returns a value from 0.0 to 1.0 representing estimated health.
-        """
-        # Standard Roblox health bar ROI (approximate top right)
-        # Using a wide strip to catch it regardless of screen variations
-        h, w = frame.shape[:2]
-        roi = frame[10:40, int(w * 0.75):w - 10]
-        
-        # Convert to HSV
-        hsv = cv2.cvtColor(roi, cv2.COLOR_RGB2HSV)
-        
-        # Look for Green, Yellow, and Red pixels
-        green = cv2.inRange(hsv, self.green_lower, self.green_upper)
-        yellow = cv2.inRange(hsv, self.banner_yellow_lower, self.banner_yellow_upper)
-        red1 = cv2.inRange(hsv, self.red_lower1, self.red_upper1)
-        red2 = cv2.inRange(hsv, self.red_lower2, self.red_upper2)
-        
-        # Combine all health bar colors
-        health_mask = cv2.bitwise_or(green, yellow)
-        health_mask = cv2.bitwise_or(health_mask, red1)
-        health_mask = cv2.bitwise_or(health_mask, red2)
-        
-        # Calculate ratio of health pixels in the ROI
-        # Max expected pixels depends on ROI size, we normalize it
-        health_pixels = cv2.countNonZero(health_mask)
-        # Assume a full health bar occupies roughly 150x10 = 1500 pixels
-        health_ratio = min(1.0, health_pixels / 1500.0)
-        return health_ratio
-
     def detect_kill_log(self, frame: np.ndarray) -> dict:
         """
         Detect kill/death events by reading the kill log text at the bottom-right
@@ -207,156 +176,14 @@ class GameDetector:
         return result
 
     # ─────────────────────────────────────────────────────────────────
-    # STEP 1 — find health bars
-    # ─────────────────────────────────────────────────────────────────
-    def detect_health_bars(self, frame: np.ndarray) -> List[dict]:
-        """Detect health-bar candidates via HSV masking + geometric filter.
-
-        Args:
-            frame: RGB uint8 image (H, W, 3).
-
-        Returns:
-            List of dicts, each with keys:
-                'bbox'   — (x, y, w, h)
-                'hp_pct' — float 0-1, estimated HP remaining
-                'center' — (cx, cy)
-        """
-        hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
-
-        # Green mask
-        mask_green = cv2.inRange(hsv, self.green_lower, self.green_upper)
-
-        # Red mask (two hue ranges merged)
-        mask_red1 = cv2.inRange(hsv, self.red_lower1, self.red_upper1)
-        mask_red2 = cv2.inRange(hsv, self.red_lower2, self.red_upper2)
-        mask_red = cv2.bitwise_or(mask_red1, mask_red2)
-
-        # Combined health-bar mask
-        mask = cv2.bitwise_or(mask_green, mask_red)
-
-        # Morphology — horizontal kernel to bridge bar fragments, then
-        # a small open to nuke isolated noise.
-        kernel_close = cv2.getStructuringElement(cv2.MORPH_RECT, (6, 2))
-        kernel_open = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel_close)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel_open)
-
-        contours, _ = cv2.findContours(
-            mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-        )
-
-        bars: List[dict] = []
-        for cnt in contours:
-            x, y, w, h = cv2.boundingRect(cnt)
-
-            # Geometric gate
-            if h < 2:
-                continue
-            aspect = w / h
-            if (
-                aspect < self.min_aspect_ratio
-                or w < self.min_bar_width
-                or w > self.max_bar_width
-                or h > self.max_bar_height
-            ):
-                continue
-
-            # HP estimation: green pixels / total coloured pixels inside bbox
-            roi_hsv = hsv[y : y + h, x : x + w]
-            green_in_roi = cv2.inRange(roi_hsv, self.green_lower, self.green_upper)
-            red1_in_roi = cv2.inRange(roi_hsv, self.red_lower1, self.red_upper1)
-            red2_in_roi = cv2.inRange(roi_hsv, self.red_lower2, self.red_upper2)
-            red_in_roi = cv2.bitwise_or(red1_in_roi, red2_in_roi)
-
-            green_count = int(np.count_nonzero(green_in_roi))
-            red_count = int(np.count_nonzero(red_in_roi))
-            total = green_count + red_count
-            hp_pct = green_count / total if total > 0 else 0.0
-
-            cx = x + w // 2
-            cy = y + h // 2
-
-            bars.append({
-                "bbox": (x, y, w, h),
-                "hp_pct": hp_pct,
-                "center": (cx, cy),
-            })
-
-        return bars
-
-    # ─────────────────────────────────────────────────────────────────
-    # STEP 2 — confirm enemies (white-text anchor)
-    # ─────────────────────────────────────────────────────────────────
-    def confirm_enemies(
-        self, frame: np.ndarray, health_bars: List[dict]
-    ) -> List[dict]:
-        """Filter health-bar candidates by checking for white username text
-        immediately below each bar.
-
-        Args:
-            frame:       RGB uint8 image.
-            health_bars: Output of :meth:`detect_health_bars`.
-
-        Returns:
-            List of confirmed enemy dicts:
-                'hp_bar'          — (x, y, w, h)
-                'hp_pct'          — float 0-1
-                'player_center'   — (px, py), estimated body centre
-                'tag_center'      — (tx, ty), health-bar centre
-                'text_confidence' — float, white-pixel ratio in text ROI
-        """
-        frame_h, frame_w = frame.shape[:2]
-        confirmed: List[dict] = []
-
-        for bar in health_bars:
-            bx, by, bw, bh = bar["bbox"]
-
-            # Text ROI: a strip just below the health bar, padded 15 px
-            # on each side to catch the full username.
-            tx1 = max(0, bx - 15)
-            ty1 = by + bh
-            tx2 = min(frame_w, bx + bw + 15)
-            ty2 = min(frame_h, by + bh + 25)
-
-            if ty1 >= ty2 or tx1 >= tx2:
-                continue  # ROI fell off the frame edge
-
-            text_roi = frame[ty1:ty2, tx1:tx2]
-
-            # White-pixel mask: all three RGB channels above threshold
-            white_mask = (
-                (text_roi[:, :, 0] > self.white_threshold)
-                & (text_roi[:, :, 1] > self.white_threshold)
-                & (text_roi[:, :, 2] > self.white_threshold)
-            )
-            white_ratio = float(np.count_nonzero(white_mask)) / white_mask.size
-
-            if white_ratio >= self.text_confirm_ratio:
-                cx, cy = bar["center"]
-                confirmed.append({
-                    "hp_bar": bar["bbox"],
-                    "hp_pct": bar["hp_pct"],
-                    "player_center": (cx, cy + 50),
-                    "tag_center": (cx, cy),
-                    "text_confidence": white_ratio,
-                })
-
-        return confirmed
-
-    # ─────────────────────────────────────────────────────────────────
-    # Convenience wrappers
+    # Enemy Detection (Disabled)
     # ─────────────────────────────────────────────────────────────────
     def detect_enemies(self, frame: np.ndarray) -> List[dict]:
-        """Full pipeline: detect bars → confirm via text anchor.
-
-        Args:
-            frame: RGB uint8 image.
-
-        Returns:
-            List of confirmed enemy dicts (see :meth:`confirm_enemies`).
         """
-        bars = self.detect_health_bars(frame)
-        return self.confirm_enemies(frame, bars)
+        Health bars are disabled in this game, so we return an empty list.
+        The bot will rely exclusively on the CNN spatial branch and OCR kill logs.
+        """
+        return []
 
     def get_nearest_enemy(
         self,

@@ -98,9 +98,7 @@ class RobloxGymEnv(gym.Env):
         self.feature_engineer.reset()
         self.input_controller.reset()
         
-        self.last_enemy_dist = None
-        self.last_player_health = 1.0
-        self.prev_enemy_hp = None
+        # Removed HP and distance tracking variables
         
         self.is_dead = False
         self.kill_cooldown = 0
@@ -144,7 +142,6 @@ class RobloxGymEnv(gym.Env):
         frame = self.screen_capture.capture()
         enemies = self.game_detector.detect_enemies(frame)
         in_safe_zone = self.game_detector.detect_safe_zone(frame)
-        player_health = self.game_detector.detect_player_health(frame)
         
         # Extract features for NN
         struct, cnn = self.feature_engineer.extract_features(frame, enemies, in_safe_zone)
@@ -182,48 +179,8 @@ class RobloxGymEnv(gym.Env):
                 killer = kill_log_status.get('killer', 'unknown')
                 print(f"\n☠️ KILLED BY: {killer} (-10 Penalty) [Step {self.step_count}]\n")
                 
-        # Check health for absolute death (falling in void or unlogged deaths)
-        if not self.is_dead and player_health < 0.05:
-            reward -= 10.0
-            terminated = True
-            self.is_dead = True
-            print(f"\n☠️ DIED! (Fell in void or killed) (-10 Penalty) [Step {self.step_count}]\n")
-            
-        elif player_health > 0.8:
-            # Respawned!
-            self.is_dead = False
-            
-        self.last_player_health = player_health
-            
-        # Distance tracking logic (hunt reward / cowardice penalty)
-        if enemies:
-            # Find nearest enemy
-            cx, cy = frame.shape[1]//2, frame.shape[0]//2
-            nearest_enemy = min(enemies, key=lambda e: np.sqrt((e['player_center'][0] - cx)**2 + (e['player_center'][1] - cy)**2))
-            nearest_dist = np.sqrt((nearest_enemy['player_center'][0] - cx)**2 + (nearest_enemy['player_center'][1] - cy)**2)
-            
-            # Distance reward
-            if self.last_enemy_dist is not None:
-                dist_delta = self.last_enemy_dist - nearest_dist
-                if dist_delta > 5: # Moved significantly closer
-                    reward += 0.05
-                elif dist_delta < -5: # Moved significantly further (cowardice)
-                    reward -= 0.01
-            
-            self.last_enemy_dist = nearest_dist
-            
-            # Dense Combat Reward
-            current_enemy_hp = nearest_enemy.get('hp_pct', 1.0)
-            if self.prev_enemy_hp is not None:
-                hp_drop = self.prev_enemy_hp - current_enemy_hp
-                if 0.05 < hp_drop < 0.95:  # Filter out extreme noise (respawns or false detections)
-                    reward += hp_drop * 10.0  # Big reward for landing hits
-                    print(f"\n🗡️ HIT! Enemy lost {hp_drop*100:.0f}% HP! (+{hp_drop*10.0:.2f} Reward) [Step {self.step_count}]\n")
-            
-            self.prev_enemy_hp = current_enemy_hp
-        else:
-            self.last_enemy_dist = None
-            self.prev_enemy_hp = None
+        # We now rely exclusively on the OCR Kill Log for our rewards/penalties.
+        # No health bar tracking, no distance tracking.
             
         return obs, reward, terminated, truncated, {}
 
