@@ -160,8 +160,8 @@ class RLTrainer:
                 batch_size=64,
                 n_epochs=10,
                 gamma=rl_config.get('gamma', 0.99),
-                clip_range=rl_config.get('clip_range', 0.2),
                 ent_coef=0.05, # HIGH ENTROPY for forced curiosity (spamming clicks)
+                target_kl=0.03, # CLAMP KL DIVERGENCE to protect BC weights
                 policy_kwargs=policy_kwargs,
                 verbose=1,
                 device=device

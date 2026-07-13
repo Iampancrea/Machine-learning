@@ -51,7 +51,7 @@ features:
     # For 1920x1200 screen (physical coordinates scanned by mss):
     screen_region: [1300, 1080, 620, 60]  # [left, top, width, height]
     confidence_threshold: 0.4
-    scan_interval_frames: 15  # OCR every 15 frames (~0.5 sec at 30fps)
+    scan_interval_frames: 45  # OCR every 45 frames (less CPU usage)
     dedup_timeout_seconds: 4.0  # Ignore duplicate kill log lines within this window
 
   # Player death detection (health bar in top-right corner)
@@ -114,9 +114,9 @@ behavior_cloning:
 reinforcement_learning:
   algorithm: "PPO"  # PPO or DQN (PPO recommended for continuous actions)
   episodes: 1000
-  steps_per_episode: 500
+  steps_per_episode: 256
   gamma: 0.99  # Discount factor
-  learning_rate: 0.0003
+  learning_rate: 0.00003
   clip_range: 0.2
   entropy_coef: 0.01
   
@@ -133,11 +133,11 @@ actions:
   keyboard_keys: ["W", "A", "S", "D", "SPACE", "SHIFT"]
   mouse_buttons: ["left", "right"]
   mouse_sensitivity: 0.5  # Lower = smoother movements
-  action_repeat: 1  # Repeat action for N frames
+  action_repeat: 4  # Repeat action for N frames (crucial for finishing sword swings)
   
 # Human-like behavior
 humanization:
-  enable_reaction_delay: true
+  enable_reaction_delay: false
   min_reaction_time_ms: 150  # Minimum human reaction time
   max_reaction_time_ms: 350  # Maximum human reaction time
   jitter_std: 0.05  # Random noise added to movements

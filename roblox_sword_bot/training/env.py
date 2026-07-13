@@ -79,6 +79,9 @@ class RobloxGymEnv(gym.Env):
         # OCR scan interval
         self.ocr_scan_interval = config.get('features', {}).get(
             'kill_log', {}).get('scan_interval_frames', 15)
+            
+        # Action repeat
+        self.action_repeat = config.get('actions', {}).get('action_repeat', 4)
         
         # State tracking
         self.is_dead = False
@@ -145,96 +148,103 @@ class RobloxGymEnv(gym.Env):
         return obs, {}
 
     def step(self, action_idx):
-        self.step_count += 1
-        
-        # Enforce 30 FPS limit to prevent PC from overheating
-        target_frame_time = 1.0 / 30.0
-        elapsed = time.time() - self.last_step_time
-        if elapsed < target_frame_time:
-            time.sleep(target_frame_time - elapsed)
-        self.last_step_time = time.time()
-        
-        # 1. Execute Action
         action_dict = self._decode_action(int(action_idx))
         self.last_action = action_dict
-        self.input_controller.execute_action(action_dict)
         
-        # 2. Get New State
-        frame = self.screen_capture.capture()
-        enemies = self.game_detector.detect_enemies(frame)
-        in_safe_zone = self.game_detector.detect_safe_zone(frame)
+        total_reward = 0.0
+        terminated = False
+        truncated = False
         
-        # Extract features for NN
+        for _ in range(self.action_repeat):
+            self.step_count += 1
+            
+            # Enforce 30 FPS limit to prevent PC from overheating
+            target_frame_time = 1.0 / 30.0
+            elapsed = time.time() - self.last_step_time
+            if elapsed < target_frame_time:
+                time.sleep(target_frame_time - elapsed)
+            self.last_step_time = time.time()
+            
+            # 1. Execute Action
+            self.input_controller.execute_action(action_dict)
+            
+            # 2. Get New State (only basics needed during repeat)
+            frame = self.screen_capture.capture()
+            enemies = self.game_detector.detect_enemies(frame)
+            in_safe_zone = self.game_detector.detect_safe_zone(frame)
+            
+            # 3. Reward Shaping
+            step_reward = 0.0
+            
+            # ── Death detection (EVERY frame — fast, no OCR) ─────────────
+            if not self.is_dead and self.game_detector.detect_death():
+                step_reward += self.reward_death
+                terminated = True
+                self.is_dead = True
+                self.episode_deaths += 1
+                print(f"\n☠️  DEATH DETECTED (health bar greyed) | "
+                      f"Reward: {self.reward_death} | Step {self.step_count} | "
+                      f"Episode kills: {self.episode_kills}")
+            
+            # ── Kill log OCR (every N frames — slower, uses OCR) ─────────
+            if self.step_count % self.ocr_scan_interval == 0:
+                kill_log_status = self.game_detector.detect_kill_log()
+                
+                # Check for kill (we killed someone) with cooldown
+                if self.kill_cooldown > 0:
+                    self.kill_cooldown -= 1
+                    
+                if kill_log_status['kill'] and self.kill_cooldown == 0:
+                    step_reward += self.reward_kill
+                    self.kill_cooldown = 3  # 3 OCR checks = ~1.5 seconds cooldown
+                    self.episode_kills += 1
+                    victim = kill_log_status.get('victim', 'unknown')
+                    print(f"\n🩸 KILL! You killed: {victim} | "
+                          f"Reward: +{self.reward_kill} | Step {self.step_count} | "
+                          f"Total kills: {self.episode_kills}")
+                    
+                # Check OCR for death as backup
+                if kill_log_status['death'] and not self.is_dead:
+                    step_reward += self.reward_death
+                    terminated = True
+                    self.is_dead = True
+                    self.episode_deaths += 1
+                    killer = kill_log_status.get('killer', 'unknown')
+                    print(f"\n☠️  KILLED BY (OCR): {killer} | "
+                          f"Reward: {self.reward_death} | Step {self.step_count}")
+            
+            # ── Continuous rewards (every frame) ─────────────────────────
+            if not terminated:
+                # Safe zone camping penalty
+                if in_safe_zone:
+                    step_reward += self.reward_safe_zone
+                
+                # Enemy engagement bonus (enemies visible = we're in the fight)
+                if enemies:
+                    step_reward += self.reward_near_enemy
+                
+                # Idle penalty (no keys pressed and no clicks)
+                if action_dict and not action_dict.get('keys') and not action_dict.get('click_left'):
+                    step_reward += self.reward_idle
+            
+            total_reward += step_reward
+            self.episode_reward += step_reward
+            
+            # Periodic status update
+            if self.step_count % 60 == 0:
+                print(f"  [Step {self.step_count}] Enemies: {len(enemies)} | "
+                      f"Safe: {in_safe_zone} | Reward: {self.episode_reward:.2f} | "
+                      f"Kills: {self.episode_kills}")
+                      
+            if terminated:
+                break
+                
+        # Only compute the CNN features on the FINAL frame of the action repeat loop to save CPU
         struct, cnn = self.feature_engineer.extract_features(frame, enemies, in_safe_zone)
         cnn = np.expand_dims(cnn.astype(np.float32) / 255.0, axis=0)
-        
         obs = {
             "structured": struct.astype(np.float32),
             "cnn_frame": cnn
         }
         
-        # 3. Reward Shaping
-        reward = 0.0
-        terminated = False
-        truncated = False
-        
-        # ── Death detection (EVERY frame — fast, no OCR) ─────────────
-        if not self.is_dead and self.game_detector.detect_death():
-            reward += self.reward_death
-            terminated = True
-            self.is_dead = True
-            self.episode_deaths += 1
-            print(f"\n☠️  DEATH DETECTED (health bar greyed) | "
-                  f"Reward: {self.reward_death} | Step {self.step_count} | "
-                  f"Episode kills: {self.episode_kills}")
-        
-        # ── Kill log OCR (every N frames — slower, uses OCR) ─────────
-        if self.step_count % self.ocr_scan_interval == 0:
-            kill_log_status = self.game_detector.detect_kill_log()
-            
-            # Check for kill (we killed someone) with cooldown
-            if self.kill_cooldown > 0:
-                self.kill_cooldown -= 1
-                
-            if kill_log_status['kill'] and self.kill_cooldown == 0:
-                reward += self.reward_kill
-                self.kill_cooldown = 3  # 3 OCR checks = ~1.5 seconds cooldown
-                self.episode_kills += 1
-                victim = kill_log_status.get('victim', 'unknown')
-                print(f"\n🩸 KILL! You killed: {victim} | "
-                      f"Reward: +{self.reward_kill} | Step {self.step_count} | "
-                      f"Total kills: {self.episode_kills}")
-                
-            # Check OCR for death as backup (in case health bar check missed it)
-            if kill_log_status['death'] and not self.is_dead:
-                reward += self.reward_death
-                terminated = True
-                self.is_dead = True
-                self.episode_deaths += 1
-                killer = kill_log_status.get('killer', 'unknown')
-                print(f"\n☠️  KILLED BY (OCR): {killer} | "
-                      f"Reward: {self.reward_death} | Step {self.step_count}")
-        
-        # ── Continuous rewards (every frame) ─────────────────────────
-        if not terminated:
-            # Safe zone camping penalty
-            if in_safe_zone:
-                reward += self.reward_safe_zone
-            
-            # Enemy engagement bonus (enemies visible = we're in the fight)
-            if enemies:
-                reward += self.reward_near_enemy
-            
-            # Idle penalty (no keys pressed and no clicks)
-            if action_dict and not action_dict.get('keys') and not action_dict.get('click_left'):
-                reward += self.reward_idle
-        
-        self.episode_reward += reward
-        
-        # Periodic status update
-        if self.step_count % 60 == 0:
-            print(f"  [Step {self.step_count}] Enemies: {len(enemies)} | "
-                  f"Safe: {in_safe_zone} | Reward: {self.episode_reward:.2f} | "
-                  f"Kills: {self.episode_kills}")
-            
-        return obs, reward, terminated, truncated, {}
+        return obs, total_reward, terminated, truncated, {}
