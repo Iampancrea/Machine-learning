@@ -85,8 +85,8 @@ class RobloxGymEnv(gym.Env):
             
             return {
                 'keys': keys,
-                'mouse_dx': mouse_dx * 0.5,
-                'mouse_dy': mouse_dy * 0.5,
+                'mouse_dx': mouse_dx * 0.1,
+                'mouse_dy': mouse_dy * 0.1,
                 'click': click_left,
                 'click_left': click_left,
                 'click_right': click_right
@@ -145,24 +145,6 @@ class RobloxGymEnv(gym.Env):
         enemies = self.game_detector.detect_enemies(frame)
         in_safe_zone = self.game_detector.detect_safe_zone(frame)
         player_health = self.game_detector.detect_player_health(frame)
-        
-        # Auto-aim (Camera centering on nearest enemy)
-        if enemies:
-            cx = frame.shape[1] // 2
-            cy = frame.shape[0] // 2
-            nearest = min(enemies, key=lambda e: np.sqrt((e['player_center'][0] - cx)**2 + (e['player_center'][1] - cy)**2))
-            ex, ey = nearest['player_center']
-            
-            # Normalize delta to [-1.0, 1.0]
-            dx = (ex - cx) / cx
-            
-            # Rotate camera towards enemy
-            if abs(dx) > 0.08:
-                import pydirectinput as pdi
-                # Hold RMB, turn camera, release RMB (works for both Shift Lock and Normal mode)
-                pdi.mouseDown(button='right')
-                self.input_controller.move_mouse_relative(dx * 0.45, 0.0)
-                pdi.mouseUp(button='right')
         
         # Extract features for NN
         struct, cnn = self.feature_engineer.extract_features(frame, enemies, in_safe_zone)

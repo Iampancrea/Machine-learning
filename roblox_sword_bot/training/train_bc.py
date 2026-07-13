@@ -88,8 +88,8 @@ class GameplayDataset(Dataset):
                 keys = sorted([k for k in raw_keys if k not in ['alt', 'e']])
                 click_left = 1 if action.get('click_left', action.get('click', False)) else 0
                 click_right = 1 if action.get('click_right', False) else 0
-                mouse_dx = 1 if action.get('mouse_dx', 0) > 0.1 else (-1 if action.get('mouse_dx', 0) < -0.1 else 0)
-                mouse_dy = 1 if action.get('mouse_dy', 0) > 0.1 else (-1 if action.get('mouse_dy', 0) < -0.1 else 0)
+                mouse_dx = 1 if action.get('mouse_dx', 0) > 0.005 else (-1 if action.get('mouse_dx', 0) < -0.005 else 0)
+                mouse_dy = 1 if action.get('mouse_dy', 0) > 0.005 else (-1 if action.get('mouse_dy', 0) < -0.005 else 0)
                 
                 action_key = f"{','.join(keys)}_{click_left}_{click_right}_{mouse_dx}_{mouse_dy}"
                 all_actions.add(action_key)
