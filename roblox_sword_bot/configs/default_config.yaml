@@ -124,7 +124,9 @@ reinforcement_learning:
 rewards:
   kill: 10.0           # Successfully killed another player
   death: -10.0         # Got killed by another player
-  safe_zone_penalty: -0.05  # Per-step penalty for camping in safe zone
+  safe_zone_penalty: -0.05  # Per-step penalty for camping in safe zone (only after first leave)
+  safe_zone_leave: 2.0       # One-time reward for leaving safe zone after spawn/respawn
+  safe_zone_reenter: -2.0    # One-time penalty for cowardly re-entry (not after death)
   near_enemy_bonus: 0.02    # Per-step bonus when enemies are visible
   idle_penalty: -0.01       # Per-step penalty for doing nothing
 

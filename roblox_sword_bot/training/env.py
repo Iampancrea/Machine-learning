@@ -73,6 +73,8 @@ class RobloxGymEnv(gym.Env):
         self.reward_kill = rewards_cfg.get('kill', 10.0)
         self.reward_death = rewards_cfg.get('death', -10.0)
         self.reward_safe_zone = rewards_cfg.get('safe_zone_penalty', -0.05)
+        self.reward_safe_zone_leave = rewards_cfg.get('safe_zone_leave', 2.0)
+        self.reward_safe_zone_reenter = rewards_cfg.get('safe_zone_reenter', -2.0)
         self.reward_near_enemy = rewards_cfg.get('near_enemy_bonus', 0.02)
         self.reward_idle = rewards_cfg.get('idle_penalty', -0.01)
         
@@ -92,6 +94,12 @@ class RobloxGymEnv(gym.Env):
         self.episode_reward = 0.0
         self.last_action = None
         self.show_vision = config.get("debug_vision", True)
+        
+        # Dense Reward: Safe Zone state machine
+        # has_left_safe_zone = False → bot just spawned/respawned, no penalty for being in safe zone
+        # has_left_safe_zone = True  → bot has been out in the field, re-entering = cowardice penalty
+        self.has_left_safe_zone = False
+        self.prev_in_safe_zone = True  # assume we start in safe zone
         
     def _decode_action(self, action_idx: int) -> dict:
         """Convert integer action from PPO to our standard input dictionary"""
@@ -149,6 +157,8 @@ class RobloxGymEnv(gym.Env):
         self.episode_reward = 0.0
         self.last_action = None
         self.last_step_time = time.time()
+        self.has_left_safe_zone = False
+        self.prev_in_safe_zone = True
         
         print(f"\n--- NEW EPISODE ---")
         
@@ -209,6 +219,9 @@ class RobloxGymEnv(gym.Env):
                 terminated = True
                 self.is_dead = True
                 self.episode_deaths += 1
+                # Reset safe zone flag on death so respawn doesn't get penalized
+                self.has_left_safe_zone = False
+                self.prev_in_safe_zone = True
                 print(f"\n☠️  DEATH DETECTED (health bar greyed) | "
                       f"Reward: {self.reward_death} | Step {self.step_count} | "
                       f"Episode kills: {self.episode_kills}")
@@ -242,8 +255,26 @@ class RobloxGymEnv(gym.Env):
             
             # ── Continuous rewards (every frame) ─────────────────────────
             if not terminated:
-                # Safe zone camping penalty
-                if in_safe_zone:
+                # ── Dense Reward: Safe Zone State Machine ─────────────
+                # Transition: was in safe zone → now outside = LEFT the zone
+                if self.prev_in_safe_zone and not in_safe_zone:
+                    if not self.has_left_safe_zone:
+                        # First time leaving after spawn/respawn → big reward
+                        step_reward += self.reward_safe_zone_leave
+                        self.has_left_safe_zone = True
+                        print(f"  🏃 LEFT SAFE ZONE! +{self.reward_safe_zone_leave} reward")
+                
+                # Transition: was outside → now back in safe zone = COWARDICE
+                if not self.prev_in_safe_zone and in_safe_zone:
+                    if self.has_left_safe_zone:
+                        # Re-entered safe zone without dying → penalty
+                        step_reward += self.reward_safe_zone_reenter
+                        print(f"  🐔 RE-ENTERED SAFE ZONE! {self.reward_safe_zone_reenter} penalty")
+                
+                self.prev_in_safe_zone = in_safe_zone
+                
+                # Per-frame safe zone camping drip penalty (on top of the -2 event)
+                if in_safe_zone and self.has_left_safe_zone:
                     step_reward += self.reward_safe_zone
                 
                 # Enemy engagement bonus (enemies visible = we're in the fight)
