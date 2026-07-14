@@ -7,6 +7,7 @@ FIXED: pyautogui replaced with pydirectinput_rgx for DirectInput
 FIXED: Async pynput ESC listener → os._exit(0) hard kill-switch.
 """
 import pydirectinput as pdi
+pdi.FAILSAFE = False  # Disable corner-of-screen mouse crash
 import pynput.keyboard
 import pynput.mouse
 import numpy as np
