@@ -384,7 +384,7 @@ class GameDetector:
             
         if self.player_template is not None and self.frame_count % 5 == 0:
             cx_c = width // 2
-            cw = 200
+            cw = 400  # Wide enough to fit the 235px wide template + movement wiggle room
             x1, x2 = max(0, cx_c - cw//2), min(width, cx_c + cw//2)
             y1, y2 = int(height * 0.3), height  # Only search bottom 70%
             
