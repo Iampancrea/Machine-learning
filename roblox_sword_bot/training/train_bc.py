@@ -85,7 +85,10 @@ class GameplayDataset(Dataset):
                 
                 # Convert action to string key
                 raw_keys = action.get('keys', [])
-                keys = sorted([k for k in raw_keys if k not in ['alt', 'e', 'shift', 'tab', 'ALT', 'E', 'SHIFT', 'TAB']])
+                junk = {'alt', 'e', 'shift', 'tab', 'ALT', 'E', 'SHIFT', 'TAB',
+                        'KEY.SHIFT', 'KEY.TAB', 'KEY.ALT', 'KEY.ALT_L', 'KEY.ALT_R',
+                        'KEY.F2', 'KEY.CTRL', 'KEY.CTRL_L', 'KEY.ESC'}
+                keys = sorted([k for k in raw_keys if k not in junk])
                 click_left = 1 if action.get('click_left', action.get('click', False)) else 0
                 click_right = 1 if action.get('click_right', False) else 0
                 mouse_dx = 1 if action.get('mouse_dx', 0) > 0.005 else (-1 if action.get('mouse_dx', 0) < -0.005 else 0)
@@ -113,8 +116,15 @@ class GameplayDataset(Dataset):
         # Structured features
         struct_feat = torch.FloatTensor(self.features[idx])
         
-        # CNN frame: add channel dimension (1, 60, 80) and normalize to 0-1 float32
-        cnn_frame = torch.FloatTensor(self.cnn_frames[idx]).unsqueeze(0) / 255.0
+        # CNN frame: handle legacy 1-channel data and new 2-channel data
+        frame_data = self.cnn_frames[idx]
+        if len(frame_data.shape) == 2:  # Legacy (60, 80)
+            cnn_frame = torch.FloatTensor(frame_data).unsqueeze(0) / 255.0
+            # Pad with empty mask channel to match network expecting (2, 60, 80)
+            empty_mask = torch.zeros_like(cnn_frame)
+            cnn_frame = torch.cat([cnn_frame, empty_mask], dim=0)
+        else:  # New (2, 60, 80)
+            cnn_frame = torch.FloatTensor(frame_data) / 255.0
         
         # Action label
         action = self.actions[idx]
