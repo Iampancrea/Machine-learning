@@ -308,10 +308,9 @@ class InputController:
         # Execute left click (M1)
         click_left = action.get('click_left', action.get('click', False))
         if click_left and not self.left_held:
-            pdi.mouseDown(button='left')
+            pdi.click(button='left')
             self.left_held = True
         elif not click_left and self.left_held:
-            pdi.mouseUp(button='left')
             self.left_held = False
     
     def reset(self):
