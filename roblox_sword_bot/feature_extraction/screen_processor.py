@@ -85,8 +85,8 @@ class ScreenCapture:
         # Capture screenshot — already the exact bounding box, no resize needed
         screenshot = self.sct.grab(self.monitor)
         
-        # Convert to numpy array (BGRA format)
-        img = np.array(screenshot)
+        # Convert to numpy array (BGRA format) properly, avoiding Windows stride/padding issues
+        img = np.frombuffer(screenshot.bgra, dtype=np.uint8).reshape((screenshot.height, screenshot.width, 4))
         
         # Remove alpha channel (convert BGRA to BGR)
         img_bgr = img[:, :, :3]
