@@ -57,10 +57,10 @@ class RobloxGymEnv(gym.Env):
         )
         self.input_controller = InputController(config=config)
         
-        # SAC Continuous Action Space: Box(7,)
-        # [mouse_dx, mouse_dy, key_w, key_a, key_s, key_d, click_left]
+        # SAC Continuous Action Space: Box(8,)
+        # [mouse_dx, mouse_dy, key_w, key_a, key_s, key_d, key_space, click_left]
         self.action_space = spaces.Box(
-            low=-1.0, high=1.0, shape=(7,), dtype=np.float32
+            low=-1.0, high=1.0, shape=(8,), dtype=np.float32
         )
         
         # Observation space: Dict with structured (1D) and cnn_frame (5-channel)
@@ -118,7 +118,7 @@ class RobloxGymEnv(gym.Env):
         
     def _decode_sac_action(self, action_vector: np.ndarray) -> dict:
         """
-        Convert SAC's continuous Box(7,) output into our standard input dictionary.
+        Convert SAC's continuous Box(8,) output into our standard input dictionary.
         
         Mouse dx/dy are used directly as continuous values.
         Key/click outputs are thresholded at 0 to produce binary presses.
@@ -132,8 +132,9 @@ class RobloxGymEnv(gym.Env):
         if action_vector[3] > 0: keys.append('A')
         if action_vector[4] > 0: keys.append('S')
         if action_vector[5] > 0: keys.append('D')
+        if action_vector[6] > 0: keys.append('SPACE')
         
-        click_left = bool(action_vector[6] > 0)
+        click_left = bool(action_vector[7] > 0)
         
         return {
             'keys': keys,
