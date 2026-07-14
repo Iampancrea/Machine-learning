@@ -1,6 +1,15 @@
 """
 Gymnasium Environment for Roblox Sword Fight Bot
-Connects the game state to the SB3 PPO algorithm.
+Connects the game state to the SB3 SAC algorithm.
+
+ACTION SPACE: Box(7,) continuous
+    [0] mouse_dx  — continuous camera turn (left/right)
+    [1] mouse_dy  — continuous camera tilt (up/down)
+    [2] key_w     — forward (thresholded > 0)
+    [3] key_a     — left strafe (thresholded > 0)
+    [4] key_s     — backward (thresholded > 0)
+    [5] key_d     — right strafe (thresholded > 0)
+    [6] click_left — sword swing (thresholded > 0)
 
 Reward signals:
     +10.0  — Kill detected via OCR kill log
@@ -23,8 +32,9 @@ from utils.input_control import InputController
 class RobloxGymEnv(gym.Env):
     """
     Standardized Gymnasium environment for Roblox live RL training.
+    Uses SAC-compatible continuous action space.
     """
-    def __init__(self, config: dict, checkpoint_path: str):
+    def __init__(self, config: dict):
         super(RobloxGymEnv, self).__init__()
         
         self.config = config
@@ -39,23 +49,22 @@ class RobloxGymEnv(gym.Env):
         
         feature_history = config.get('features', {}).get('feature_history_length', 10)
         cnn_res = tuple(config.get('features', {}).get('cnn_resolution', [80, 60]))
+        cnn_frame_stack = config.get('features', {}).get('cnn_frame_stack', 4)
         self.feature_engineer = FeatureEngineer(
             history_length=feature_history,
-            cnn_resolution=cnn_res
+            cnn_resolution=cnn_res,
+            cnn_frame_stack=cnn_frame_stack
         )
         self.input_controller = InputController(config=config)
         
-        # Load BC model for action mapping
-        print(f"Loading action mapping from BC checkpoint: {checkpoint_path}")
-        checkpoint = torch.load(checkpoint_path, map_location='cpu')
-        self.action_mapping = checkpoint.get('action_mapping', {})
-        self.reverse_action_mapping = {v: k for k, v in self.action_mapping.items()}
-        self.num_actions = len(self.action_mapping)
+        # SAC Continuous Action Space: Box(7,)
+        # [mouse_dx, mouse_dy, key_w, key_a, key_s, key_d, click_left]
+        self.action_space = spaces.Box(
+            low=-1.0, high=1.0, shape=(7,), dtype=np.float32
+        )
         
-        # Action space: Discrete based on BC mapping
-        self.action_space = spaces.Discrete(self.num_actions)
-        
-        # Observation space: Dict with structured (1D) and cnn_frame (2D/3D)
+        # Observation space: Dict with structured (1D) and cnn_frame (5-channel)
+        cnn_channels = cnn_frame_stack + 1  # 4 grayscale + 1 enemy mask = 5
         self.observation_space = spaces.Dict({
             "structured": spaces.Box(
                 low=-np.inf, high=np.inf, 
@@ -64,7 +73,7 @@ class RobloxGymEnv(gym.Env):
             ),
             "cnn_frame": spaces.Box(
                 low=0.0, high=1.0,
-                shape=(2, cnn_res[1], cnn_res[0]),
+                shape=(cnn_channels, cnn_res[1], cnn_res[0]),
                 dtype=np.float32
             )
         })
@@ -87,6 +96,9 @@ class RobloxGymEnv(gym.Env):
         # Action repeat
         self.action_repeat = config.get('actions', {}).get('action_repeat', 4)
         
+        # Mouse sensitivity scaling for SAC
+        self.mouse_scale = config.get('actions', {}).get('mouse_sensitivity', 0.5)
+        
         # State tracking
         self.is_dead = False
         self.kill_cooldown = 0
@@ -104,31 +116,33 @@ class RobloxGymEnv(gym.Env):
         self.prev_in_safe_zone = True  # assume we start in safe zone
         self.prev_health = 1.0
         
-    def _decode_action(self, action_idx: int) -> dict:
-        """Convert integer action from PPO to our standard input dictionary"""
-        action_str = self.reverse_action_mapping.get(action_idx, "none_0_0_0_0")
-        parts = action_str.split('_')
+    def _decode_sac_action(self, action_vector: np.ndarray) -> dict:
+        """
+        Convert SAC's continuous Box(7,) output into our standard input dictionary.
         
-        if len(parts) >= 5:
-            keys = parts[0].split(',') if parts[0] and parts[0] != 'none' else []
-            # Strip out useless/dangerous keys that leaked in from old BC recordings
-            junk_keys = {'1', 'KEY.1', 'KEY.SHIFT', 'KEY.TAB', 'KEY.ALT', 'KEY.F2',
-                         'KEY.CTRL', 'KEY.ESC', 'shift', 'tab', 'alt', 'e', 'E'}
-            keys = [k for k in keys if k not in junk_keys]
-            click_left = parts[1] == '1'
-            click_right = parts[2] == '1'
-            mouse_dx = int(parts[3])
-            mouse_dy = int(parts[4])
-            
-            return {
-                'keys': keys,
-                'mouse_dx': mouse_dx * 0.1,
-                'mouse_dy': mouse_dy * 0.1,
-                'click': click_left,
-                'click_left': click_left,
-                'click_right': click_right
-            }
-        return {'keys': [], 'mouse_dx': 0, 'mouse_dy': 0, 'click': False}
+        Mouse dx/dy are used directly as continuous values.
+        Key/click outputs are thresholded at 0 to produce binary presses.
+        """
+        mouse_dx = float(action_vector[0]) * self.mouse_scale
+        mouse_dy = float(action_vector[1]) * self.mouse_scale
+        
+        # Threshold continuous outputs into binary key presses
+        keys = []
+        if action_vector[2] > 0: keys.append('W')
+        if action_vector[3] > 0: keys.append('A')
+        if action_vector[4] > 0: keys.append('S')
+        if action_vector[5] > 0: keys.append('D')
+        
+        click_left = bool(action_vector[6] > 0)
+        
+        return {
+            'keys': keys,
+            'mouse_dx': mouse_dx,
+            'mouse_dy': mouse_dy,
+            'click': click_left,
+            'click_left': click_left,
+            'click_right': False
+        }
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -180,7 +194,7 @@ class RobloxGymEnv(gym.Env):
             player_health=player_health,
             last_action=None
         )
-        # cnn is now shape (2, H, W)
+        # cnn is now shape (5, H, W) — 4 grayscale + 1 enemy mask
         cnn = cnn.astype(np.float32) / 255.0
         
         obs = {
@@ -190,8 +204,14 @@ class RobloxGymEnv(gym.Env):
         
         return obs, {}
 
-    def step(self, action_idx):
-        action_dict = self._decode_action(int(action_idx))
+    def step(self, action):
+        """
+        Execute one environment step with SAC continuous action.
+        
+        Args:
+            action: np.ndarray of shape (7,) from SAC policy
+        """
+        action_dict = self._decode_sac_action(action)
         self.last_action = action_dict
         
         total_reward = 0.0
@@ -319,9 +339,11 @@ class RobloxGymEnv(gym.Env):
             if self.step_count % 15 == 0:
                 action_keys = action_dict.get('keys', [])
                 clicking = action_dict.get('click_left', False)
+                mouse_dx = action_dict.get('mouse_dx', 0)
                 print(f"  [Step {self.step_count}] Enemies: {len(enemies)} | "
                       f"Safe: {in_safe_zone} | HP: {player_health:.0%} | "
                       f"Keys: {action_keys} | Click: {clicking} | "
+                      f"Mouse: {mouse_dx:.2f} | "
                       f"Reward: {self.episode_reward:.2f}")
                       
             if getattr(self, 'show_vision', False):

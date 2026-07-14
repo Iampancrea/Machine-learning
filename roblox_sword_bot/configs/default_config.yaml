@@ -24,6 +24,7 @@ features:
   use_ocr: true  # ENABLED — needed for kill log tracking
   feature_history_length: 10  # Number of past frames to consider
   cnn_resolution: [80, 60]  # Width x Height for CNN input frame (grayscale)
+  cnn_frame_stack: 4  # Number of grayscale frames to stack for motion detection
   
   # Health bar detection (HSV ranges)
   health_bar:
@@ -110,15 +111,17 @@ behavior_cloning:
   early_stopping_patience: 10
   validation_split: 0.2
 
-# Reinforcement Learning training
+# Reinforcement Learning training (SAC — off-policy, sample-efficient)
 reinforcement_learning:
-  algorithm: "PPO"  # PPO or DQN (PPO recommended for continuous actions)
+  algorithm: "SAC"
   episodes: 1000
-  steps_per_episode: 256
-  gamma: 0.99  # Discount factor
-  learning_rate: 0.00003
-  clip_range: 0.2
-  entropy_coef: 0.01
+  steps_per_episode: 500
+  gamma: 0.99           # Discount factor
+  learning_rate: 0.0003  # SAC default (3e-4)
+  buffer_size: 50000     # Replay buffer size (off-policy advantage!)
+  learning_starts: 500   # Random exploration steps before learning begins
+  batch_size: 64         # Mini-batch size for gradient updates
+  tau: 0.005             # Soft update coefficient for target networks
   
 # Rewards configuration
 rewards:

@@ -15,17 +15,23 @@ class FeatureEngineer:
     """Extract and combine game state features for the hybrid ML model"""
     
     def __init__(self, history_length: int = 10,
-                 cnn_resolution: Tuple[int, int] = (80, 60)):
+                 cnn_resolution: Tuple[int, int] = (80, 60),
+                 cnn_frame_stack: int = 4):
         """
         Initialize feature engineer
         
         Args:
             history_length: Number of past frames to include in features
             cnn_resolution: (width, height) for CNN input frame
+            cnn_frame_stack: Number of grayscale frames to stack for CNN motion detection
         """
         self.history_length = history_length
         self.cnn_resolution = cnn_resolution  # (width, height)
+        self.cnn_frame_stack = cnn_frame_stack
         self.feature_history = deque(maxlen=history_length)
+        
+        # Frame stacking buffer: stores last N grayscale frames for motion detection
+        self.frame_buffer = deque(maxlen=cnn_frame_stack)
         
         # Per-frame structured feature count (BEFORE history)
         self._base_feature_count = 13
@@ -77,7 +83,8 @@ class FeatureEngineer:
         Returns:
             Tuple of (structured_features, cnn_frame)
             - structured_features: 1D float32 numpy array
-            - cnn_frame: 3D float32 numpy array of shape (2, 60, 80)
+            - cnn_frame: 3D uint8 numpy array of shape (cnn_frame_stack+1, 60, 80)
+                         Channels: [gray_t, gray_t-1, gray_t-2, gray_t-3, enemy_mask]
         """
         features = []
         
@@ -130,7 +137,19 @@ class FeatureEngineer:
         cnn_frame = self.prepare_cnn_frame(frame)
         color_variance = np.std(cnn_frame) / 255.0
         
-        # ─── Build Enemy Mask (Channel 2) ───
+        # ─── Frame Stacking (4 grayscale frames for motion detection) ───
+        self.frame_buffer.append(cnn_frame)
+        
+        # Pad with copies of current frame if buffer isn't full yet
+        stacked_frames = []
+        for i in range(self.cnn_frame_stack):
+            idx = len(self.frame_buffer) - 1 - i
+            if idx >= 0:
+                stacked_frames.append(self.frame_buffer[idx])
+            else:
+                stacked_frames.append(cnn_frame)  # Duplicate current frame for padding
+        
+        # ─── Build Enemy Mask (final channel) ───
         mask = np.zeros((self.cnn_resolution[1], self.cnn_resolution[0]), dtype=np.uint8)
         scale_x = self.cnn_resolution[0] / frame.shape[1]
         scale_y = self.cnn_resolution[1] / frame.shape[0]
@@ -142,8 +161,8 @@ class FeatureEngineer:
                 # Draw a bright circle (blob) for the enemy
                 cv2.circle(mask, (ex, ey), radius=3, color=255, thickness=-1)
                 
-        # Stack channels: (Grayscale, EnemyMask) -> shape (2, 60, 80)
-        cnn_2channel = np.stack([cnn_frame, mask], axis=0)
+        # Stack channels: (gray_t, gray_t-1, gray_t-2, gray_t-3, EnemyMask) -> shape (5, 60, 80)
+        cnn_stacked = np.stack(stacked_frames + [mask], axis=0)
         
         # ─── Player State Features ───
         click_state = 0.0
@@ -177,11 +196,12 @@ class FeatureEngineer:
         if len(structured) < total_dim:
             structured = np.pad(structured, (0, total_dim - len(structured)))
         
-        return structured, cnn_2channel
+        return structured, cnn_stacked
     
     def reset(self):
-        """Clear feature history"""
+        """Clear feature history and frame buffer"""
         self.feature_history.clear()
+        self.frame_buffer.clear()
     
     def get_feature_names(self) -> List[str]:
         """Get names of all structured features for debugging"""

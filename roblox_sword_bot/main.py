@@ -221,8 +221,8 @@ def run_behavior_cloning(args):
 
 
 def run_reinforcement_learning(args):
-    """Train with reinforcement learning"""
-    print("\n🎮 Starting Reinforcement Learning...")
+    """Train with reinforcement learning (SAC)"""
+    print("\n🎮 Starting Reinforcement Learning (SAC)...")
     print(f"Episodes: {args.episodes}")
     
     try:
@@ -232,7 +232,7 @@ def run_reinforcement_learning(args):
         config = load_config(args.config)
         trainer = RLTrainer(config=config.config)
         
-        print(f"\nStarting PPO training on {config['hardware']['device']}...")
+        print(f"\nStarting SAC training on {config['hardware']['device']}...")
         trainer.train(episodes=args.episodes)
         
         print("\n✅ RL training complete!")
