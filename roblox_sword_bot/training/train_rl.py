@@ -107,6 +107,7 @@ class RLTrainer:
                 device=device,
                 custom_objects={
                     "learning_rate": rl_config.get('learning_rate', 0.0003),
+                    "buffer_size": rl_config.get('buffer_size', 10000),
                     "policy_kwargs": policy_kwargs
                 }
             )
