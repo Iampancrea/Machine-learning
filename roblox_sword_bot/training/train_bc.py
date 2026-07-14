@@ -85,7 +85,7 @@ class GameplayDataset(Dataset):
                 
                 # Convert action to string key
                 raw_keys = action.get('keys', [])
-                keys = sorted([k for k in raw_keys if k not in ['alt', 'e']])
+                keys = sorted([k for k in raw_keys if k not in ['alt', 'e', 'shift', 'tab', 'ALT', 'E', 'SHIFT', 'TAB']])
                 click_left = 1 if action.get('click_left', action.get('click', False)) else 0
                 click_right = 1 if action.get('click_right', False) else 0
                 mouse_dx = 1 if action.get('mouse_dx', 0) > 0.005 else (-1 if action.get('mouse_dx', 0) < -0.005 else 0)

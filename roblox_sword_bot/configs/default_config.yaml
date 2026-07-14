@@ -132,7 +132,7 @@ rewards:
 
 # Action space
 actions:
-  keyboard_keys: ["W", "A", "S", "D", "SPACE", "SHIFT"]
+  keyboard_keys: ["W", "A", "S", "D", "SPACE"]
   mouse_buttons: ["left", "right"]
   mouse_sensitivity: 0.5  # Lower = smoother movements
   action_repeat: 4  # Repeat action for N frames (crucial for finishing sword swings)
