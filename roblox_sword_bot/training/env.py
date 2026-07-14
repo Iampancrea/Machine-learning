@@ -336,9 +336,14 @@ class RobloxGymEnv(gym.Env):
                 debug_frame = cv2.resize(debug_frame, (dw // 3, dh // 3))
                 cv2.putText(debug_frame, "AI VISION FEED", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 255), 2)
                 
-                bgr_frame = cv2.cvtColor(debug_frame, cv2.COLOR_RGB2BGR)
-                cv2.imshow("Roblox Bot Vision", bgr_frame)
-                cv2.waitKey(1)
+                try:
+                    bgr_frame = cv2.cvtColor(debug_frame, cv2.COLOR_RGB2BGR)
+                    cv2.imshow("Roblox Bot Vision", bgr_frame)
+                    cv2.waitKey(1)
+                except cv2.error:
+                    # OpenCV built without GUI support — disable vision window
+                    self.show_vision = False
+                    print("⚠️  cv2.imshow not available. Disabling debug vision window.")
 
             if terminated:
                 break
