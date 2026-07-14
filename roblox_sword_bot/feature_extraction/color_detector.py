@@ -169,7 +169,8 @@ class GameDetector:
             _, thresh = cv2.threshold(gray, 160, 255, cv2.THRESH_BINARY)
 
             # Run EasyOCR on the small pre-processed crop (MUCH faster than full frame)
-            results = self.reader.readtext(thresh, detail=0, paragraph=True)
+            allowed_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_- "
+            results = self.reader.readtext(thresh, detail=0, paragraph=True, allowlist=allowed_chars)
             text_full = " ".join(results).lower().strip()
 
         except Exception as e:
@@ -380,8 +381,8 @@ class GameDetector:
             x1, y1 = max(0, cx_c - cw//2), max(0, cy_c - cw//2)
             x2, y2 = min(width, cx_c + cw//2), min(height, cy_c + cw//2)
             center_crop = frame[y1:y2, x1:x2]
-            
-            results = self.reader.readtext(center_crop)
+            allowed_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_- "
+            results = self.reader.readtext(center_crop, allowlist=allowed_chars)
             for (bbox, text, prob) in results:
                 # The name is "sagupaam6", so we look for "sagu"
                 if "sagu" in text.lower():
