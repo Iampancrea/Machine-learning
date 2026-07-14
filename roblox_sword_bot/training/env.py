@@ -75,7 +75,7 @@ class RobloxGymEnv(gym.Env):
         self.reward_safe_zone = rewards_cfg.get('safe_zone_penalty', -0.05)
         self.reward_safe_zone_leave = rewards_cfg.get('safe_zone_leave', 2.0)
         self.reward_safe_zone_reenter = rewards_cfg.get('safe_zone_reenter', -2.0)
-        self.reward_near_enemy = rewards_cfg.get('near_enemy_bonus', 0.02)
+        self.reward_health_drop = rewards_cfg.get('health_drop_multiplier', -20.0)
         self.reward_idle = rewards_cfg.get('idle_penalty', -0.01)
         
         # OCR scan interval
@@ -100,6 +100,7 @@ class RobloxGymEnv(gym.Env):
         # has_left_safe_zone = True  → bot has been out in the field, re-entering = cowardice penalty
         self.has_left_safe_zone = False
         self.prev_in_safe_zone = True  # assume we start in safe zone
+        self.prev_health = 1.0
         
     def _decode_action(self, action_idx: int) -> dict:
         """Convert integer action from PPO to our standard input dictionary"""
@@ -159,6 +160,7 @@ class RobloxGymEnv(gym.Env):
         self.last_step_time = time.time()
         self.has_left_safe_zone = False
         self.prev_in_safe_zone = True
+        self.prev_health = 1.0
         
         print(f"\n--- NEW EPISODE ---")
         
@@ -209,9 +211,18 @@ class RobloxGymEnv(gym.Env):
             frame = self.screen_capture.capture()
             enemies = self.game_detector.detect_enemies(frame)
             in_safe_zone = self.game_detector.detect_safe_zone(frame)
+            player_health = self.game_detector.get_player_health()
             
             # 3. Reward Shaping
             step_reward = 0.0
+            
+            # ── Pain Penalty (Health Drop) ──────────────────────────────
+            if player_health < self.prev_health and not self.is_dead:
+                damage_taken = self.prev_health - player_health
+                pain_penalty = damage_taken * self.reward_health_drop
+                step_reward += pain_penalty
+                print(f"  🩸 TOOK DAMAGE! {damage_taken*100:.0f}%. Penalty: {pain_penalty:.2f}")
+            self.prev_health = player_health
             
             # ── Death detection (EVERY frame — fast, no OCR) ─────────────
             if not self.is_dead and self.game_detector.detect_death():
@@ -276,10 +287,6 @@ class RobloxGymEnv(gym.Env):
                 # Per-frame safe zone camping drip penalty (on top of the -2 event)
                 if in_safe_zone and self.has_left_safe_zone:
                     step_reward += self.reward_safe_zone
-                
-                # Enemy engagement bonus (enemies visible = we're in the fight)
-                if enemies:
-                    step_reward += self.reward_near_enemy
                 
                 # Idle penalty (no keys pressed and no clicks)
                 if action_dict and not action_dict.get('keys') and not action_dict.get('click_left'):
