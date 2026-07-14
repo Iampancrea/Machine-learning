@@ -288,7 +288,12 @@ class RobloxGymEnv(gym.Env):
                         # left = 192, top = 156
                         screen_x = 192 + int(bank_coords[0] * (1536/800))
                         screen_y = 156 + int(bank_coords[1] * (888/600))
+                        # To click UI in Roblox, we must temporarily break out of Shift Lock
+                        self.input_controller.press_key('SHIFT', duration=0.1)
+                        time.sleep(0.1) # Wait for Roblox to unlock cursor
                         self.input_controller.force_click(screen_x, screen_y)
+                        time.sleep(0.1)
+                        self.input_controller.press_key('SHIFT', duration=0.1) # Re-engage Shift Lock
             
             # ── Death detection (EVERY frame — fast, no OCR) ─────────────
             if not self.is_dead and self.game_detector.detect_death():
