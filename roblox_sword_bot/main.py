@@ -7,6 +7,13 @@ import sys
 import os
 from pathlib import Path
 
+# Force stdout to UTF-8 to support Windows console emoji printing
+if sys.stdout.encoding != 'utf-8':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
 # Add project root to path
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
