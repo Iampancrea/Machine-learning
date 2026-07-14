@@ -107,7 +107,7 @@ class RobloxGymEnv(gym.Env):
         self.episode_deaths = 0
         self.episode_reward = 0.0
         self.last_action = None
-        self.show_vision = config.get("debug_vision", True)
+        self.show_vision = config.get("debug_vision", False)
         
         # Dense Reward: Safe Zone state machine
         # has_left_safe_zone = False → bot just spawned/respawned, no penalty for being in safe zone
