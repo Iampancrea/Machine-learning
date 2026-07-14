@@ -136,6 +136,33 @@ class GameDetector:
             _, self.player_template = cv2.threshold(tmp, 200, 255, cv2.THRESH_BINARY)
             print("👤 Loaded and thresholded player name template for perfect self-exclusion.")
 
+        # ── Bank UI Template Setup ───────────────────────────────────
+        self.bank_template_path = "checkpoints/bank_x_template.png"
+        self.bank_template = None
+        if os.path.exists(self.bank_template_path):
+            self.bank_template = cv2.imread(self.bank_template_path, cv2.IMREAD_COLOR)
+            print("🏦 Loaded Bank UI Red 'X' template.")
+
+    def detect_bank_ui(self, frame: np.ndarray) -> Optional[Tuple[int, int]]:
+        """
+        Detects if the massive Bank UI is open by template matching the Red 'X' button.
+        Returns the (x, y) coordinates of the center of the Red 'X' if found, else None.
+        """
+        if self.bank_template is None:
+            return None
+            
+        res = cv2.matchTemplate(frame, self.bank_template, cv2.TM_CCOEFF_NORMED)
+        min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
+        
+        # 0.8 is a solid threshold for identical UI elements
+        if max_val > 0.8:
+            h, w = self.bank_template.shape[:2]
+            center_x = max_loc[0] + w // 2
+            center_y = max_loc[1] + h // 2
+            return (center_x, center_y)
+            
+        return None
+
     # ─────────────────────────────────────────────────────────────────
     # Kill Log OCR (grabs its own ROI from the full screen)
     # ─────────────────────────────────────────────────────────────────

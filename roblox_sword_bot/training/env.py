@@ -265,6 +265,31 @@ class RobloxGymEnv(gym.Env):
                 else:
                     step_reward += self.reward_trigger_penalty
             
+            # ── Bank UI Penalty & Auto-Close ─────────────────────────────
+            if not self.is_dead:
+                bank_coords = self.game_detector.detect_bank_ui(frame)
+                if bank_coords is not None:
+                    step_reward -= 5.0
+                    print(f"  ❌ BANK UI OPENED! -5.0 penalty applied. Auto-closing...")
+                    
+                    # Convert internal 800x600 coordinates to actual screen coordinates
+                    # The capture region starts at (192, 156) for the 1536x888 window
+                    # This math maps the template center to the actual screen pixel
+                    capture_cfg = self.config.get('capture', {})
+                    monitor = capture_cfg.get('monitor', 1)
+                    if monitor == 1: # Assuming primary monitor fullscreen/borderless
+                        # Wait, input controller already has move_mouse_absolute which expects 0-1
+                        # Force click uses absolute raw pixels for PyDirectInput
+                        # The bounding box of Roblox is captured by mss
+                        from feature_extraction.screen_processor import ScreenCapture
+                        # Actually we can just use the exact pixel coordinates since our frame is 800x600 
+                        # BUT pydirectinput needs actual screen pixels. 
+                        # ScreenCapture uses a region. Let's just estimate it for 1920x1080 center:
+                        # left = 192, top = 156
+                        screen_x = 192 + int(bank_coords[0] * (1536/800))
+                        screen_y = 156 + int(bank_coords[1] * (888/600))
+                        self.input_controller.force_click(screen_x, screen_y)
+            
             # ── Death detection (EVERY frame — fast, no OCR) ─────────────
             if not self.is_dead and self.game_detector.detect_death():
                 step_reward += self.reward_death

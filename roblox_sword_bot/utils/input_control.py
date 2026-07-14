@@ -263,6 +263,16 @@ class InputController:
             if clicks > 1:
                 time.sleep(0.1)  # Delay between multiple clicks
     
+    def force_click(self, x: int, y: int):
+        """
+        Instantly move the mouse to absolute screen coordinates and click.
+        Used to forcefully close UI popups (like the Bank Menu).
+        """
+        pdi.moveTo(x, y)
+        time.sleep(0.05)
+        pdi.click()
+        print(f"🖱️ Force-clicked at ({x}, {y})")
+
     def execute_action(self, action: Dict):
         """
         Execute a complete action from model output
