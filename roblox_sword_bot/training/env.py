@@ -314,10 +314,13 @@ class RobloxGymEnv(gym.Env):
             self.episode_reward += step_reward
             
             # Periodic status update
-            if self.step_count % 60 == 0:
+            if self.step_count % 15 == 0:
+                action_keys = action_dict.get('keys', [])
+                clicking = action_dict.get('click_left', False)
                 print(f"  [Step {self.step_count}] Enemies: {len(enemies)} | "
-                      f"Safe: {in_safe_zone} | Reward: {self.episode_reward:.2f} | "
-                      f"Kills: {self.episode_kills}")
+                      f"Safe: {in_safe_zone} | HP: {player_health:.0%} | "
+                      f"Keys: {action_keys} | Click: {clicking} | "
+                      f"Reward: {self.episode_reward:.2f}")
                       
             if getattr(self, 'show_vision', False):
                 import cv2
