@@ -76,6 +76,8 @@ class RobloxGymEnv(gym.Env):
         self.reward_safe_zone_leave = rewards_cfg.get('safe_zone_leave', 2.0)
         self.reward_safe_zone_reenter = rewards_cfg.get('safe_zone_reenter', -2.0)
         self.reward_health_drop = rewards_cfg.get('health_drop_multiplier', -1.0)
+        self.reward_trigger_bonus = rewards_cfg.get('trigger_bonus', 0.05)
+        self.reward_trigger_penalty = rewards_cfg.get('trigger_penalty', -0.01)
         self.reward_idle = rewards_cfg.get('idle_penalty', -0.01)
         
         # OCR scan interval
@@ -223,6 +225,22 @@ class RobloxGymEnv(gym.Env):
                 step_reward += pain_penalty
                 print(f"  🩸 TOOK DAMAGE! {damage_taken*100:.0f}%. Penalty: {pain_penalty:.2f}")
             self.prev_health = player_health
+            
+            # ── Trigger Discipline (Clicking at enemies) ─────────────────
+            if action_dict.get('click_left', False) and not self.is_dead:
+                swung_at_enemy = False
+                for enemy in enemies:
+                    if 'player_center' in enemy:
+                        px, py = enemy['player_center']
+                        # Distance from center crosshair (400, 300)
+                        dist = ((px - 400)**2 + (py - 300)**2)**0.5
+                        if dist < 150.0:  # Enemy is in front of us
+                            swung_at_enemy = True
+                            break
+                if swung_at_enemy:
+                    step_reward += self.reward_trigger_bonus
+                else:
+                    step_reward += self.reward_trigger_penalty
             
             # ── Death detection (EVERY frame — fast, no OCR) ─────────────
             if not self.is_dead and self.game_detector.detect_death():

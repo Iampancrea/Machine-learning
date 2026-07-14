@@ -128,6 +128,8 @@ rewards:
   safe_zone_leave: 2.0       # One-time reward for leaving safe zone after spawn/respawn
   safe_zone_reenter: -2.0    # One-time penalty for cowardly re-entry (not after death)
   health_drop_multiplier: -1.0 # Penalty multiplier for taking damage (e.g. 10% hit = -0.1)
+  trigger_bonus: 0.05        # Bonus for swinging when enemy is in crosshair
+  trigger_penalty: -0.01     # Penalty for spam-clicking air
   idle_penalty: -0.01       # Per-step penalty for doing nothing
 
 # Action space
