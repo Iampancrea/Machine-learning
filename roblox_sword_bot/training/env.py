@@ -75,7 +75,7 @@ class RobloxGymEnv(gym.Env):
         self.reward_safe_zone = rewards_cfg.get('safe_zone_penalty', -0.05)
         self.reward_safe_zone_leave = rewards_cfg.get('safe_zone_leave', 2.0)
         self.reward_safe_zone_reenter = rewards_cfg.get('safe_zone_reenter', -2.0)
-        self.reward_health_drop = rewards_cfg.get('health_drop_multiplier', -20.0)
+        self.reward_health_drop = rewards_cfg.get('health_drop_multiplier', -1.0)
         self.reward_idle = rewards_cfg.get('idle_penalty', -0.01)
         
         # OCR scan interval

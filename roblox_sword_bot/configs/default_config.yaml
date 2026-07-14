@@ -127,7 +127,7 @@ rewards:
   safe_zone_penalty: -0.05  # Per-step penalty for camping in safe zone (only after first leave)
   safe_zone_leave: 2.0       # One-time reward for leaving safe zone after spawn/respawn
   safe_zone_reenter: -2.0    # One-time penalty for cowardly re-entry (not after death)
-  near_enemy_bonus: 0.02    # Per-step bonus when enemies are visible
+  health_drop_multiplier: -1.0 # Penalty multiplier for taking damage (e.g. 10% hit = -0.1)
   idle_penalty: -0.01       # Per-step penalty for doing nothing
 
 # Action space
