@@ -132,8 +132,9 @@ class GameDetector:
         self.player_template_path = "checkpoints/player_name_template.png"
         self.player_template = None
         if os.path.exists(self.player_template_path):
-            self.player_template = cv2.imread(self.player_template_path, cv2.IMREAD_GRAYSCALE)
-            print("👤 Loaded player name template for perfect self-exclusion.")
+            tmp = cv2.imread(self.player_template_path, cv2.IMREAD_GRAYSCALE)
+            _, self.player_template = cv2.threshold(tmp, 200, 255, cv2.THRESH_BINARY)
+            print("👤 Loaded and thresholded player name template for perfect self-exclusion.")
 
     # ─────────────────────────────────────────────────────────────────
     # Kill Log OCR (grabs its own ROI from the full screen)
@@ -357,9 +358,9 @@ class GameDetector:
         # Mask for bright green pixels (the "XX HP" text color)
         green_mask = cv2.inRange(hsv, self.hp_hsv_lower, self.hp_hsv_upper)
         
-        # Mask for the distinct Red Clock icon above every player's head
-        r_mask1 = cv2.inRange(hsv, self.red_lower1, self.red_upper1)
-        r_mask2 = cv2.inRange(hsv, self.red_lower2, self.red_upper2)
+        # Mask for the distinct BRIGHT Red Clock icon above every player's head
+        r_mask1 = cv2.inRange(hsv, np.array([0, 150, 200]), np.array([10, 255, 255]))
+        r_mask2 = cv2.inRange(hsv, np.array([170, 150, 200]), np.array([180, 255, 255]))
         red_mask = cv2.bitwise_or(r_mask1, r_mask2)
 
         # Spatial filtering: zero out bottom (green floor) and top (banner)
@@ -392,12 +393,15 @@ class GameDetector:
             y1, y2 = int(height * 0.3), height  # Only search bottom 70%
             
             gray_frame = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
-            roi = gray_frame[y1:y2, x1:x2]
+            roi_gray = gray_frame[y1:y2, x1:x2]
             
-            res = cv2.matchTemplate(roi, self.player_template, cv2.TM_CCOEFF_NORMED)
+            # Threshold to pure black/white to completely ignore background colors!
+            _, roi_thresh = cv2.threshold(roi_gray, 200, 255, cv2.THRESH_BINARY)
+            
+            res = cv2.matchTemplate(roi_thresh, self.player_template, cv2.TM_CCOEFF_NORMED)
             _, max_val, _, max_loc = cv2.minMaxLoc(res)
             
-            if max_val > 0.55:  # Lowered confidence slightly to prevent self-targeting drops
+            if max_val > 0.50:  # Binary match is highly reliable
                 # max_loc[1] is the top Y coordinate of the matched template relative to ROI
                 self.player_hp_y = y1 + max_loc[1]
                 
