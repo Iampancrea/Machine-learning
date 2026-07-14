@@ -355,21 +355,9 @@ class GameDetector:
         green_mask[:exclude_top_px, :] = 0
         green_mask[exclude_bottom_px:, :] = 0
 
-        # Also exclude leftmost ~20% (UI elements like Kills counter, score)
+        # Exclude leftmost ~20% (UI elements like Kills counter, score)
         ui_cutoff = int(width * 0.18)
         green_mask[:, :ui_cutoff] = 0
-
-        # Exclude player center (own health bar/sword)
-        # Creates a blank box in the exact middle of the screen (20% width, 30% height)
-        cx_c = width // 2
-        cy_c = height // 2
-        box_w = int(width * 0.20)
-        box_h = int(height * 0.30)
-        x1 = max(0, cx_c - box_w // 2)
-        x2 = min(width, cx_c + box_w // 2)
-        y1 = max(0, cy_c - box_h // 2)
-        y2 = min(height, cy_c + box_h // 2)
-        green_mask[y1:y2, x1:x2] = 0
 
         # Morphological operations to clean up noise and connect text fragments
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 3))
@@ -381,6 +369,27 @@ class GameDetector:
         contours, _ = cv2.findContours(green_mask, cv2.RETR_EXTERNAL,
                                         cv2.CHAIN_APPROX_SIMPLE)
 
+        # Periodically use OCR to find the exact Y position of the player's nametag
+        if not hasattr(self, 'frame_count'):
+            self.frame_count = 0
+            self.player_hp_y = None
+            
+        if self.use_ocr and self.frame_count % 150 == 0:  # Every ~5 seconds
+            cx_c, cy_c = width // 2, height // 2
+            cw = 200  # 200x200 crop in the exact center
+            x1, y1 = max(0, cx_c - cw//2), max(0, cy_c - cw//2)
+            x2, y2 = min(width, cx_c + cw//2), min(height, cy_c + cw//2)
+            center_crop = frame[y1:y2, x1:x2]
+            
+            results = self.reader.readtext(center_crop)
+            for (bbox, text, prob) in results:
+                # The name is "sagupaam6", so we look for "sagu"
+                if "sagu" in text.lower():
+                    name_top_y = y1 + bbox[0][1]
+                    self.player_hp_y = name_top_y
+                    break
+        self.frame_count += 1
+
         # Filter contours by size and aspect ratio
         candidates = []
         for cnt in contours:
@@ -391,6 +400,21 @@ class GameDetector:
             x, y, w, h = cv2.boundingRect(cnt)
             if h == 0:
                 continue
+                
+            cx = x + w // 2
+            cy = y + h // 2
+
+            # ── Player Exclusion Logic ──
+            # The player is ALWAYS horizontally anchored to the center of the screen
+            if abs(cx - (width // 2)) < 50:
+                if self.player_hp_y is not None:
+                    # Player HP text is slightly above the name text
+                    if abs(cy - (self.player_hp_y - 20)) < 40:
+                        continue  # It's our own HP text!
+                else:
+                    # Fallback: if in the vertical center-ish, assume it's the player
+                    if cy > (height * 0.4) and cy < (height * 0.6):
+                        continue
 
             aspect = w / h
             if aspect < self.ed_min_aspect or aspect > self.ed_max_aspect:
