@@ -386,13 +386,8 @@ class GameDetector:
             cx = x + w // 2
             cy = y + h // 2
 
-            # ── Player Exclusion Logic ──
-            # The player is ALWAYS horizontally anchored to the center of the screen.
-            # We exclude a vertical column in the center of the screen from Y=40% downwards.
-            # This perfectly covers the player's nametag, even when jumping.
-            if abs(cx - (width // 2)) < int(width * 0.12):
-                if cy > int(height * 0.35):
-                    continue  # Ignore anything in this bottom-center blindspot
+            # Player Exclusion Logic will be replaced with a perfect Template Matcher.
+            # Temporarily disabled geometric blindspot to prevent close-range deadzones.
 
             aspect = w / h
             if aspect < self.ed_min_aspect or aspect > self.ed_max_aspect:
