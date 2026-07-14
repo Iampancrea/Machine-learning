@@ -128,6 +128,13 @@ class GameDetector:
         # mss instance for separate screen captures (kill log, health bar)
         self._sct = mss.MSS()
 
+        # ── Player Name Template Setup ───────────────────────────────
+        self.player_template_path = "checkpoints/player_name_template.png"
+        self.player_template = None
+        if os.path.exists(self.player_template_path):
+            self.player_template = cv2.imread(self.player_template_path, cv2.IMREAD_GRAYSCALE)
+            print("👤 Loaded player name template for perfect self-exclusion.")
+
     # ─────────────────────────────────────────────────────────────────
     # Kill Log OCR (grabs its own ROI from the full screen)
     # ─────────────────────────────────────────────────────────────────
@@ -370,7 +377,28 @@ class GameDetector:
         contours, _ = cv2.findContours(green_mask, cv2.RETR_EXTERNAL,
                                         cv2.CHAIN_APPROX_SIMPLE)
 
-        # Removed OCR-based player exclusion (handled geometrically below)
+        # ── Perfect Template Matcher for Player Name ──
+        if not hasattr(self, 'frame_count'):
+            self.frame_count = 0
+            self.player_hp_y = None
+            
+        if self.player_template is not None and self.frame_count % 5 == 0:
+            cx_c = width // 2
+            cw = 200
+            x1, x2 = max(0, cx_c - cw//2), min(width, cx_c + cw//2)
+            y1, y2 = int(height * 0.3), height  # Only search bottom 70%
+            
+            gray_frame = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+            roi = gray_frame[y1:y2, x1:x2]
+            
+            res = cv2.matchTemplate(roi, self.player_template, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, max_loc = cv2.minMaxLoc(res)
+            
+            if max_val > 0.65:  # High confidence match
+                # max_loc[1] is the top Y coordinate of the matched template relative to ROI
+                self.player_hp_y = y1 + max_loc[1]
+                
+        self.frame_count += 1
 
         # Filter contours by size and aspect ratio
         candidates = []
@@ -386,8 +414,15 @@ class GameDetector:
             cx = x + w // 2
             cy = y + h // 2
 
-            # Player Exclusion Logic will be replaced with a perfect Template Matcher.
-            # Temporarily disabled geometric blindspot to prevent close-range deadzones.
+            # ── Player Exclusion Logic ──
+            # The player is ALWAYS horizontally anchored to the center of the screen.
+            # If we know exactly where the name is (via perfect template match),
+            # we just ignore any HP bar directly above it!
+            if self.player_hp_y is not None:
+                if abs(cx - (width // 2)) < 80:
+                    # Player HP text (100 HP) is drawn slightly above the name text
+                    if cy < self.player_hp_y and cy > (self.player_hp_y - 45):
+                        continue  # It's our own HP text!
 
             aspect = w / h
             if aspect < self.ed_min_aspect or aspect > self.ed_max_aspect:
