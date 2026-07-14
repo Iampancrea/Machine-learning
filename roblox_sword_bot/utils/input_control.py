@@ -309,9 +309,7 @@ class InputController:
         click_left = action.get('click_left', action.get('click', False))
         if click_left and not self.left_held:
             pdi.mouseDown(button='left')
-            time.sleep(0.01)
-            pdi.mouseUp(button='left')
-            # It's an instant click-release, so we don't hold the state
+            self.left_held = True
         elif not click_left and self.left_held:
             pdi.mouseUp(button='left')
             self.left_held = False
