@@ -356,6 +356,11 @@ class GameDetector:
 
         # Mask for bright green pixels (the "XX HP" text color)
         green_mask = cv2.inRange(hsv, self.hp_hsv_lower, self.hp_hsv_upper)
+        
+        # Mask for the distinct Red Clock icon above every player's head
+        r_mask1 = cv2.inRange(hsv, self.red_lower1, self.red_upper1)
+        r_mask2 = cv2.inRange(hsv, self.red_lower2, self.red_upper2)
+        red_mask = cv2.bitwise_or(r_mask1, r_mask2)
 
         # Spatial filtering: zero out bottom (green floor) and top (banner)
         exclude_top_px = int(height * self.ed_exclude_top)
@@ -368,10 +373,8 @@ class GameDetector:
         green_mask[:, :ui_cutoff] = 0
 
         # Morphological operations to clean up noise and connect text fragments
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 3))
+        kernel = np.ones((self.ed_min_area, self.ed_min_area), np.uint8)
         green_mask = cv2.morphologyEx(green_mask, cv2.MORPH_CLOSE, kernel)
-        green_mask = cv2.morphologyEx(green_mask, cv2.MORPH_OPEN,
-                                       cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2)))
 
         # Find contours
         contours, _ = cv2.findContours(green_mask, cv2.RETR_EXTERNAL,
@@ -394,7 +397,7 @@ class GameDetector:
             res = cv2.matchTemplate(roi, self.player_template, cv2.TM_CCOEFF_NORMED)
             _, max_val, _, max_loc = cv2.minMaxLoc(res)
             
-            if max_val > 0.65:  # High confidence match
+            if max_val > 0.55:  # Lowered confidence slightly to prevent self-targeting drops
                 # max_loc[1] is the top Y coordinate of the matched template relative to ROI
                 self.player_hp_y = y1 + max_loc[1]
                 
@@ -416,6 +419,17 @@ class GameDetector:
                 
             cx = x + w // 2
             cy = y + h // 2
+
+            # ── Red Clock Verification (Foolproof enemy confirmation) ──
+            # The red timer clock is ALWAYS slightly left and above the "100 HP" text.
+            roi_y1 = max(0, y - 35)
+            roi_y2 = max(0, y)
+            roi_x1 = max(0, x - 40)
+            roi_x2 = min(width, x + 30)
+            
+            red_pixels = cv2.countNonZero(red_mask[roi_y1:roi_y2, roi_x1:roi_x2])
+            if red_pixels < 8:  # Need at least a few red pixels to confirm it's a real player's clock
+                continue
 
             # ── Player Exclusion Logic ──
             # The player is ALWAYS horizontally anchored to the center of the screen.
