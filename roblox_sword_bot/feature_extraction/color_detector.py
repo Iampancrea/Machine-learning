@@ -370,26 +370,7 @@ class GameDetector:
         contours, _ = cv2.findContours(green_mask, cv2.RETR_EXTERNAL,
                                         cv2.CHAIN_APPROX_SIMPLE)
 
-        # Periodically use OCR to find the exact Y position of the player's nametag
-        if not hasattr(self, 'frame_count'):
-            self.frame_count = 0
-            self.player_hp_y = None
-            
-        if self.use_ocr and self.frame_count % 150 == 0:  # Every ~5 seconds
-            cx_c, cy_c = width // 2, height // 2
-            cw = 200  # 200x200 crop in the exact center
-            x1, y1 = max(0, cx_c - cw//2), max(0, cy_c - cw//2)
-            x2, y2 = min(width, cx_c + cw//2), min(height, cy_c + cw//2)
-            center_crop = frame[y1:y2, x1:x2]
-            allowed_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_- "
-            results = self.reader.readtext(center_crop, allowlist=allowed_chars)
-            for (bbox, text, prob) in results:
-                # The name is "sagupaam6", so we look for "sagu"
-                if "sagu" in text.lower():
-                    name_top_y = y1 + bbox[0][1]
-                    self.player_hp_y = name_top_y
-                    break
-        self.frame_count += 1
+        # Removed OCR-based player exclusion (handled geometrically below)
 
         # Filter contours by size and aspect ratio
         candidates = []
@@ -406,16 +387,12 @@ class GameDetector:
             cy = y + h // 2
 
             # ── Player Exclusion Logic ──
-            # The player is ALWAYS horizontally anchored to the center of the screen
-            if abs(cx - (width // 2)) < 50:
-                if self.player_hp_y is not None:
-                    # Player HP text is slightly above the name text
-                    if abs(cy - (self.player_hp_y - 20)) < 40:
-                        continue  # It's our own HP text!
-                else:
-                    # Fallback: if in the vertical center-ish, assume it's the player
-                    if cy > (height * 0.4) and cy < (height * 0.6):
-                        continue
+            # The player is ALWAYS horizontally anchored to the center of the screen.
+            # We exclude a vertical column in the center of the screen from Y=40% downwards.
+            # This perfectly covers the player's nametag, even when jumping.
+            if abs(cx - (width // 2)) < int(width * 0.12):
+                if cy > int(height * 0.35):
+                    continue  # Ignore anything in this bottom-center blindspot
 
             aspect = w / h
             if aspect < self.ed_min_aspect or aspect > self.ed_max_aspect:

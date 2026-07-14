@@ -71,7 +71,7 @@ features:
     hp_text_hsv_upper: [85, 255, 255]
     # Contour filtering
     min_contour_area: 15       # Minimum pixel area for a valid HP text blob
-    max_contour_area: 8000     # Maximum pixel area (filter out green floor tiles)
+    max_contour_area: 600      # Maximum pixel area (filters out giant green text like 'FREE SPIN')
     min_aspect_ratio: 1.2      # HP text is wider than tall
     max_aspect_ratio: 20.0     # Not absurdly wide (noise)
     # Spatial filtering (relative to 800x600 capture frame)
