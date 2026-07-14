@@ -355,8 +355,15 @@ class GameDetector:
         # Convert to HSV
         hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
 
-        # Mask for bright green pixels (the "XX HP" text color)
+        # Mask for HP text colors (Green, Yellow, and Red depending on health levels)
         green_mask = cv2.inRange(hsv, self.hp_hsv_lower, self.hp_hsv_upper)
+        yellow_mask = cv2.inRange(hsv, np.array([15, 80, 150]), np.array([35, 255, 255]))
+        red_mask_hp1 = cv2.inRange(hsv, np.array([0, 80, 150]), np.array([15, 255, 255]))
+        red_mask_hp2 = cv2.inRange(hsv, np.array([165, 80, 150]), np.array([180, 255, 255]))
+        red_mask_hp = cv2.bitwise_or(red_mask_hp1, red_mask_hp2)
+        
+        hp_mask = cv2.bitwise_or(green_mask, yellow_mask)
+        hp_mask = cv2.bitwise_or(hp_mask, red_mask_hp)
         
         # Mask for the distinct BRIGHT Red Clock icon above every player's head
         r_mask1 = cv2.inRange(hsv, np.array([0, 150, 200]), np.array([10, 255, 255]))
@@ -366,19 +373,19 @@ class GameDetector:
         # Spatial filtering: zero out bottom (green floor) and top (banner)
         exclude_top_px = int(height * self.ed_exclude_top)
         exclude_bottom_px = int(height * (1.0 - self.ed_exclude_bottom))
-        green_mask[:exclude_top_px, :] = 0
-        green_mask[exclude_bottom_px:, :] = 0
+        hp_mask[:exclude_top_px, :] = 0
+        hp_mask[exclude_bottom_px:, :] = 0
 
         # Exclude leftmost ~20% (UI elements like Kills counter, score)
         ui_cutoff = int(width * 0.18)
-        green_mask[:, :ui_cutoff] = 0
+        hp_mask[:, :ui_cutoff] = 0
 
         # Morphological operations to clean up noise and connect text fragments
         kernel = np.ones((self.ed_min_area, self.ed_min_area), np.uint8)
-        green_mask = cv2.morphologyEx(green_mask, cv2.MORPH_CLOSE, kernel)
+        hp_mask = cv2.morphologyEx(hp_mask, cv2.MORPH_CLOSE, kernel)
 
         # Find contours
-        contours, _ = cv2.findContours(green_mask, cv2.RETR_EXTERNAL,
+        contours, _ = cv2.findContours(hp_mask, cv2.RETR_EXTERNAL,
                                         cv2.CHAIN_APPROX_SIMPLE)
 
 
