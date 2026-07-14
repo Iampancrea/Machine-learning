@@ -400,7 +400,7 @@ class GameDetector:
                 
         self.frame_count += 1
 
-        # Filter contours by size and aspect ratio
+        # Filter contours by size, shape, and aspect ratio
         candidates = []
         for cnt in contours:
             area = cv2.contourArea(cnt)
@@ -408,7 +408,10 @@ class GameDetector:
                 continue
 
             x, y, w, h = cv2.boundingRect(cnt)
-            if h == 0:
+            
+            # The "100 HP" text is small and horizontal.
+            # Filter out vertical swords (h > 30) and long slanted lines (w > 120 or h > 40)
+            if h < 4 or h > 30 or w < 10 or w > 120:
                 continue
                 
             cx = x + w // 2
