@@ -241,12 +241,12 @@ class RobloxGymEnv(gym.Env):
             # 3. Reward Shaping
             step_reward = 0.0
             
-            # ── Pain Penalty (Health Drop) ──────────────────────────────
+            # ── Pain Penalty (Health Drop) [DISABLED FOR NOW] ───────────────────
             if player_health < self.prev_health and not self.is_dead:
-                damage_taken = self.prev_health - player_health
-                pain_penalty = damage_taken * self.reward_health_drop
-                step_reward += pain_penalty
-                print(f"  🩸 TOOK DAMAGE! {damage_taken*100:.0f}%. Penalty: {pain_penalty:.2f}")
+                pass # damage_taken = self.prev_health - player_health
+                # pain_penalty = damage_taken * self.reward_health_drop
+                # step_reward += pain_penalty
+                # print(f"  🩸 TOOK DAMAGE! {damage_taken*100:.0f}%. Penalty: {pain_penalty:.2f}")
             self.prev_health = player_health
             
             # ── Trigger Discipline (Clicking at enemies) ─────────────────
