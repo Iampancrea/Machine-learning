@@ -111,8 +111,10 @@ class RobloxGymEnv(gym.Env):
         
         if len(parts) >= 5:
             keys = parts[0].split(',') if parts[0] and parts[0] != 'none' else []
-            # Strip out '1' or 'KEY.1' to prevent unequipping the sword during fight
-            keys = [k for k in keys if k not in ['1', 'KEY.1']]
+            # Strip out useless/dangerous keys that leaked in from old BC recordings
+            junk_keys = {'1', 'KEY.1', 'KEY.SHIFT', 'KEY.TAB', 'KEY.ALT', 'KEY.F2',
+                         'KEY.CTRL', 'KEY.ESC', 'shift', 'tab', 'alt', 'e', 'E'}
+            keys = [k for k in keys if k not in junk_keys]
             click_left = parts[1] == '1'
             click_right = parts[2] == '1'
             mouse_dx = int(parts[3])
