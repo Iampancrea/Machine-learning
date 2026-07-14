@@ -344,6 +344,8 @@ class RobloxGymEnv(gym.Env):
                 try:
                     bgr_frame = cv2.cvtColor(debug_frame, cv2.COLOR_RGB2BGR)
                     cv2.imshow("Roblox Bot Vision", bgr_frame)
+                    # Force window to stay on top so it floats above Roblox
+                    cv2.setWindowProperty("Roblox Bot Vision", cv2.WND_PROP_TOPMOST, 1)
                     cv2.waitKey(1)
                 except cv2.error:
                     # OpenCV built without GUI support — disable vision window
