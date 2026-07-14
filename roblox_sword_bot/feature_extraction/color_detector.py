@@ -381,31 +381,7 @@ class GameDetector:
         contours, _ = cv2.findContours(green_mask, cv2.RETR_EXTERNAL,
                                         cv2.CHAIN_APPROX_SIMPLE)
 
-        # ── Perfect Template Matcher for Player Name ──
-        if not hasattr(self, 'frame_count'):
-            self.frame_count = 0
-            self.player_hp_y = None
-            
-        if self.player_template is not None and self.frame_count % 5 == 0:
-            cx_c = width // 2
-            cw = 400  # Wide enough to fit the 235px wide template + movement wiggle room
-            x1, x2 = max(0, cx_c - cw//2), min(width, cx_c + cw//2)
-            y1, y2 = int(height * 0.3), height  # Only search bottom 70%
-            
-            gray_frame = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
-            roi_gray = gray_frame[y1:y2, x1:x2]
-            
-            # Threshold to pure black/white to completely ignore background colors!
-            _, roi_thresh = cv2.threshold(roi_gray, 200, 255, cv2.THRESH_BINARY)
-            
-            res = cv2.matchTemplate(roi_thresh, self.player_template, cv2.TM_CCOEFF_NORMED)
-            _, max_val, _, max_loc = cv2.minMaxLoc(res)
-            
-            if max_val > 0.50:  # Binary match is highly reliable
-                # max_loc[1] is the top Y coordinate of the matched template relative to ROI
-                self.player_hp_y = y1 + max_loc[1]
-                
-        self.frame_count += 1
+
 
         # Filter contours by size, shape, and aspect ratio
         candidates = []
@@ -435,16 +411,6 @@ class GameDetector:
             if red_pixels < 8:  # Need at least a few red pixels to confirm it's a real player's clock
                 continue
 
-            # ── Player Exclusion Logic ──
-            # The player is ALWAYS horizontally anchored to the center of the screen.
-            # If we know exactly where the name is (via perfect template match),
-            # we just ignore any HP bar directly above it!
-            if self.player_hp_y is not None:
-                if abs(cx - (width // 2)) < 80:
-                    # Player HP text (100 HP) is drawn slightly above the name text
-                    if cy < self.player_hp_y and cy > (self.player_hp_y - 45):
-                        continue  # It's our own HP text!
-
             aspect = w / h
             if aspect < self.ed_min_aspect or aspect > self.ed_max_aspect:
                 continue
@@ -456,6 +422,17 @@ class GameDetector:
                 'bbox': (x, y, w, h),
                 'area': area,
             })
+
+        if not candidates:
+            return []
+
+        # ── Player Exclusion Logic (Scale-Invariant & Zero Deadzones) ──
+        # Since the camera is behind the player, the player's own nametag is ALWAYS 
+        # the lowest candidate (maximum Y coordinate) in the center vertical column.
+        center_candidates = [c for c in candidates if abs(c['center'][0] - (width // 2)) < 60]
+        if center_candidates:
+            player_cand = max(center_candidates, key=lambda c: c['center'][1])
+            candidates.remove(player_cand)
 
         if not candidates:
             return []
