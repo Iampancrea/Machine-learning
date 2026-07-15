@@ -117,7 +117,7 @@ class BotController:
                 return {
                     'keys': keys,
                     'mouse_dx': mouse_dx * 0.5,
-                    'mouse_dy': mouse_dy * 0.5,
+                    'mouse_dy': mouse_dy * 0.05,  # Restrict vertical tilt to keep camera level
                     'click_left': click_left,
                     'click_right': click_right
                 }

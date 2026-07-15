@@ -124,7 +124,7 @@ class RobloxGymEnv(gym.Env):
         Key/click outputs are thresholded at 0 to produce binary presses.
         """
         mouse_dx = float(action_vector[0]) * self.mouse_scale
-        mouse_dy = float(action_vector[1]) * self.mouse_scale
+        mouse_dy = float(action_vector[1]) * self.mouse_scale * 0.05  # Restrict vertical tilt to keep camera level
         
         # Threshold continuous outputs into binary key presses
         keys = []
@@ -164,10 +164,12 @@ class RobloxGymEnv(gym.Env):
                     print("⚠️ Respawn wait timed out (12s). Resuming anyway.")
                     break
             print("✅ Respawn detected. Equipping sword...")
-            time.sleep(1.0) # Wait for character to settle
+            time.sleep(2.0) # Wait longer for character and inventory to load
             
         # Ensure sword is equipped on spawn/respawn
-        self.input_controller.press_key('1', duration=0.15)
+        self.input_controller.press_key('1', duration=0.2)
+        time.sleep(0.1)
+        self.input_controller.press_key('1', duration=0.2)
         
         self.is_dead = False
         self.kill_cooldown = 0
@@ -417,6 +419,10 @@ class RobloxGymEnv(gym.Env):
                     print("⚠️  cv2.imshow not available. Disabling debug vision window.")
 
             if terminated:
+                break
+                
+            if self.step_count >= self.config.get('steps_per_episode', 500):
+                truncated = True
                 break
                 
         # Only compute the CNN features on the FINAL frame of the action repeat loop to save CPU
