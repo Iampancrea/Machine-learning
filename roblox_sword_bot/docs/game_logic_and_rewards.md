@@ -30,3 +30,28 @@ Based on the game logic, these are the micro-behaviors we must reward/penalize:
 4. **Self-Preservation:** Heavily penalize taking damage (when `player_health` decreases frame-over-frame).
 
 This document is the absolute ground truth for the RL environment tuning moving forward.
+
+## 4. Newly Discovered Game Logic & AI Lessons Learned
+
+During active reinforcement learning iterations, we discovered several critical nuances in Roblox's game logic and UI interactions, requiring structural changes in the perception and control layers:
+
+### A. Boundary Fluctuations (Safe Zone Symmetries)
+* **The Issue:** The safe zone boundary is not clean; visual noise or subtle character movements cause the detector to flicker rapidly between `Safe: True` and `Safe: False`.
+* **Asymmetry Trap:** If leaving the zone gives a reward of `+2.0` only once, but re-entering penalizes the bot `-2.0` every time, a flickering boundary creates an infinite negative reward loop (cowardice trap).
+* **The Solution:** We balanced the state machine. The initial leave gives `+2.0`, subsequent re-entries penalize `-2.0`, but leaving the zone *again* awards a counter-balancing `+2.0`. This ensures boundary fluctuations remain net-neutral while still enforcing a per-frame camping penalty of `-0.05` for actually staying inside.
+
+### B. Intrusive UI Popups (Bank & Follow Us Panels)
+* **The Issue:** The game dynamically spawns popup windows (such as the Bank Menu and the "Follow Us" promotional panel). These popups capture mouse and keyboard focus, preventing the bot from looking around or fighting.
+* **The Solution:** 
+  1. We added OpenCV template matching for both the Bank UI and the Follow Us panel's red close buttons (`bank_x_template.png` and `follow_x_template.png`).
+  2. The bot is penalized `-5.0` for letting a popup stay open.
+  3. **Control Breakout:** To click the 'X' button, the bot must temporarily break out of Shift Lock (by tapping `SHIFT`), wait for Roblox to release mouse lock, perform a `force_click` on the screen coordinates of the button, wait, and tap `SHIFT` again to re-engage combat camera lock.
+
+### C. Respawn & Inventory Loading Latency
+* **The Issue:** When a player dies and respawns, Roblox does not load the player's tools/inventory instantly. Pressing the slot key `1` immediately on spawn often fails to equip the sword, leaving the bot weaponless.
+* **The Solution:** We increased the post-respawn sleep to `2.0` seconds to allow the game to settle, and programmed the controller to double-tap `1` (with a `0.1` second delay) to guarantee the sword is successfully equipped.
+
+### D. Strict Episode Truncation
+* **The Issue:** Because the environment runs continuously, if the bot is too passive or fails to die, the training loop would play infinitely in a single episode, ignoring the configured `steps_per_episode: 500` limit.
+* **The Solution:** We implemented an explicit check at step 500 to set `truncated = True`, forcing a hard reset of the environment to start a fresh episode.
+
