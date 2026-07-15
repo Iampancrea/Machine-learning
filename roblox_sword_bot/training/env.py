@@ -172,6 +172,7 @@ class RobloxGymEnv(gym.Env):
         self.is_dead = False
         self.kill_cooldown = 0
         self.step_count = 0
+        self.gym_step_count = 0
         self.episode_kills = 0
         self.episode_deaths = 0
         self.episode_reward = 0.0
@@ -214,6 +215,7 @@ class RobloxGymEnv(gym.Env):
         """
         action_dict = self._decode_sac_action(action)
         self.last_action = action_dict
+        self.gym_step_count += 1
         
         total_reward = 0.0
         terminated = False
@@ -419,7 +421,7 @@ class RobloxGymEnv(gym.Env):
             if terminated:
                 break
                 
-            if self.step_count >= self.config.get('steps_per_episode', 500):
+            if self.gym_step_count >= self.config.get('steps_per_episode', 500):
                 truncated = True
                 break
                 
