@@ -147,7 +147,9 @@ class RLTrainer:
         )
         
         print("\n🔥 Training Started! (Press ESC at any time to hard-kill the process)")
-        total_timesteps = episodes * rl_config.get('steps_per_episode', 500)
+        action_repeat = self.config.get('actions', {}).get('action_repeat', 4)
+        steps_per_episode = rl_config.get('steps_per_episode', 500)
+        total_timesteps = episodes * (steps_per_episode // action_repeat)
         
         try:
             model.learn(total_timesteps=total_timesteps, callback=checkpoint_callback)
