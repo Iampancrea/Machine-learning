@@ -50,6 +50,8 @@ Examples:
     parser.add_argument('--device', type=str, default=None,
                        choices=['cpu', 'cuda'],
                        help='Device for training/inference')
+    parser.add_argument('--seed', type=int, default=None,
+                       help='Global random seed for reproducibility')
     parser.add_argument('--debug', action='store_true',
                        help='Enable debug mode with verbose logging')
     
@@ -61,6 +63,16 @@ Examples:
     print(f"Command: {args.command}")
     print(f"Config: {args.config}")
     print("=" * 60)
+    
+    # Apply global seed
+    if args.seed is not None:
+        import torch
+        import numpy as np
+        import random
+        torch.manual_seed(args.seed)
+        np.random.seed(args.seed)
+        random.seed(args.seed)
+        print(f"🌱 Global seed set to: {args.seed}")
     
     # Execute command
     if args.command == 'record':
@@ -120,8 +132,10 @@ def run_recording(args):
         def on_move(x, y):
             # Track relative movement via delta from last position
             if hasattr(on_move, 'last_x'):
-                dx = (x - on_move.last_x) / 800.0  # Normalize
-                dy = (y - on_move.last_y) / 600.0
+                import pydirectinput as pdi
+                sw, sh = pdi.size()
+                dx = (x - on_move.last_x) / float(sw)
+                dy = (y - on_move.last_y) / float(sh)
                 action_logger.move_mouse(dx, dy)
             on_move.last_x = x
             on_move.last_y = y

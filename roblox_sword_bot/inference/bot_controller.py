@@ -230,9 +230,12 @@ class BotController:
                 # Predict action
                 action, confidence = self.predict_action(structured_features, cnn_frame)
                 
-                # Execute action (skip if in safe zone for safety)
-                if confidence >= self.confidence_threshold and not in_safe_zone:
-                    self.input_controller.execute_action(action)
+                # Execute action (release keys if in safe zone for safety)
+                if confidence >= self.confidence_threshold:
+                    if not in_safe_zone:
+                        self.input_controller.execute_action(action)
+                    else:
+                        self.input_controller.execute_action({'keys': [], 'mouse_dx': 0, 'mouse_dy': 0, 'click_left': False, 'click_right': False})
                 
                 # Update statistics
                 frame_count += 1

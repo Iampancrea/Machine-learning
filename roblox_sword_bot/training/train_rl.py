@@ -117,7 +117,7 @@ class RLTrainer:
                 env=env,
                 device=device,
                 custom_objects={
-                    "learning_rate": rl_config.get('learning_rate', 0.0003),
+                    "learning_rate": rl_config.get('learning_rate', 0.00003),
                     "buffer_size": rl_config.get('buffer_size', 10000),
                     "policy_kwargs": policy_kwargs
                 }
@@ -127,13 +127,13 @@ class RLTrainer:
             model = SAC(
                 "MultiInputPolicy",
                 env,
-                learning_rate=rl_config.get('learning_rate', 0.0003),
+                learning_rate=rl_config.get('learning_rate', 0.00003),
                 buffer_size=rl_config.get('buffer_size', 50000),
                 learning_starts=rl_config.get('learning_starts', 500),
                 batch_size=rl_config.get('batch_size', 64),
                 tau=rl_config.get('tau', 0.005),
                 gamma=rl_config.get('gamma', 0.99),
-                ent_coef='auto',  # SAC auto-tunes entropy for maximum exploration
+                ent_coef=rl_config.get('entropy_coef', 'auto'),
                 policy_kwargs=policy_kwargs,
                 verbose=1,
                 device=device
@@ -147,9 +147,7 @@ class RLTrainer:
         )
         
         print("\n🔥 Training Started! (Press ESC at any time to hard-kill the process)")
-        action_repeat = self.config.get('actions', {}).get('action_repeat', 4)
-        steps_per_episode = rl_config.get('steps_per_episode', 500)
-        total_timesteps = episodes * (steps_per_episode // action_repeat)
+        total_timesteps = episodes * rl_config.get('steps_per_episode', 500)
         
         try:
             model.learn(total_timesteps=total_timesteps, callback=checkpoint_callback)

@@ -117,7 +117,8 @@ reinforcement_learning:
   episodes: 1000
   steps_per_episode: 500
   gamma: 0.99           # Discount factor
-  learning_rate: 0.0003  # SAC default (3e-4)
+  learning_rate: 0.00003  # Fixed config drift (was 0.0003)
+  entropy_coef: 0.01      # Added entropy coef
   buffer_size: 10000     # Replay buffer size (reverted to prevent 9GB RAM allocation error)
   learning_starts: 1000   # Random exploration steps before learning begins
   batch_size: 64         # Mini-batch size for gradient updates
@@ -154,7 +155,7 @@ humanization:
 # Inference settings
 inference:
   fps_limit: 60  # Match game FPS
-  confidence_threshold: 0.0  # LOWERED TO 0.0 - ALWAYS take the most likely action
+  confidence_threshold: 0.4  # Changed from 0.0 to 0.4 to prevent OOD action execution
   smoothing_window: 3  # Frame averaging for smoother movements
   safety_mode: true  # Enable anti-detection features
 

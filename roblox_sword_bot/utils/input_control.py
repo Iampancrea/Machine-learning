@@ -178,8 +178,8 @@ class InputController:
         try:
             pdi.keyUp(pdi_key)
             self.pressed_keys.discard(key)
-        except:
-            pass  # Key might not be pressed
+        except Exception as e:
+            print(f"⚠️ Warning: Key release error for {key}: {e}")
     
     def execute_keys(self, keys: List[str]):
         """

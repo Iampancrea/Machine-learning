@@ -97,7 +97,8 @@ class GameplayDataset(Dataset):
                 action_key = f"{','.join(keys)}_{click_left}_{click_right}_{mouse_dx}_{mouse_dy}"
                 all_actions.add(action_key)
                 parsed_actions.append(action_key)
-            except:
+            except Exception as e:
+                print(f"⚠️ Warning: Failed to parse action {action_json}. Error: {e}")
                 parsed_actions.append("none_0_0_0_0")
         
         # Create mapping
@@ -193,13 +194,16 @@ class BehaviorCloningTrainer:
             train_dataset, 
             batch_size=batch_size, 
             shuffle=True,
-            num_workers=0  # Keep at 0 for Windows compatibility
+            num_workers=4,
+            persistent_workers=True
         )
         
         val_loader = DataLoader(
             val_dataset, 
             batch_size=batch_size, 
-            shuffle=False
+            shuffle=False,
+            num_workers=4,
+            persistent_workers=True
         )
         
         # Setup optimizer
