@@ -83,6 +83,10 @@ class InputController:
         self.sensitivity = self.config.get('actions', {}).get('mouse_sensitivity', 0.5)
         self.screen_width, self.screen_height = pdi.size()
         
+        # Click timing settings
+        self.last_click_time = 0.0
+        self.click_cooldown = self.config.get('actions', {}).get('click_cooldown_ms', 250) / 1000.0
+        
         # Keyboard state
         self.pressed_keys = set()
         
@@ -307,11 +311,8 @@ class InputController:
         
         # Execute left click (M1)
         click_left = action.get('click_left', action.get('click', False))
-        if click_left and not self.left_held:
+        if click_left:
             pdi.click(button='left')
-            self.left_held = True
-        elif not click_left and self.left_held:
-            self.left_held = False
     
     def reset(self):
         """Release all keys and reset state"""

@@ -266,7 +266,9 @@ class RobloxGymEnv(gym.Env):
                     step_reward += self.reward_trigger_penalty
             
             # ── Bank UI Penalty & Auto-Close ─────────────────────────────
-            if not self.is_dead:
+            current_time = time.time()
+            if not self.is_dead and (current_time - getattr(self, 'last_bank_check_time', 0.0) >= 1.0):
+                self.last_bank_check_time = current_time
                 bank_coords = self.game_detector.detect_bank_ui(frame)
                 if bank_coords is not None:
                     step_reward -= 5.0
@@ -282,12 +284,10 @@ class RobloxGymEnv(gym.Env):
                         # Force click uses absolute raw pixels for PyDirectInput
                         # The bounding box of Roblox is captured by mss
                         from feature_extraction.screen_processor import ScreenCapture
-                        # Actually we can just use the exact pixel coordinates since our frame is 800x600 
-                        # BUT pydirectinput needs actual screen pixels. 
-                        # ScreenCapture uses a region. Let's just estimate it for 1920x1080 center:
-                        # left = 192, top = 156
-                        screen_x = 192 + int(bank_coords[0] * (1536/800))
-                        screen_y = 156 + int(bank_coords[1] * (888/600))
+                        # Calculate precise absolute screen coordinates by adding the capture region offset
+                        # Since the frame is exactly the capture resolution, no scaling is needed.
+                        screen_x = self.screen_capture.monitor['left'] + int(bank_coords[0])
+                        screen_y = self.screen_capture.monitor['top'] + int(bank_coords[1])
                         # To click UI in Roblox, we must temporarily break out of Shift Lock
                         self.input_controller.press_key('SHIFT', duration=0.1)
                         time.sleep(0.1) # Wait for Roblox to unlock cursor

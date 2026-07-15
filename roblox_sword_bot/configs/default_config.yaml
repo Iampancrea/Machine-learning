@@ -141,6 +141,7 @@ actions:
   mouse_buttons: ["left", "right"]
   mouse_sensitivity: 0.5  # Lower = smoother movements
   action_repeat: 4  # Repeat action for N frames (crucial for finishing sword swings)
+  click_cooldown_ms: 250  # Cooldown between clicks in milliseconds (prevent Roblox animation break while maintaining swing)
   
 # Human-like behavior
 humanization:

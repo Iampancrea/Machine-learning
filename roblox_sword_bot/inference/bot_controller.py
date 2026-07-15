@@ -181,11 +181,29 @@ class BotController:
         
         frame_count = 0
         start_time = time.time()
+        last_bank_check_time = 0.0
         
         try:
             while self.running:
                 # Capture frame
                 frame = self.screen_capture.capture()
+                current_time = time.time()
+                
+                # Detect and handle Bank UI (auto-close) - throttled to save CPU
+                if current_time - last_bank_check_time >= 1.0:
+                    last_bank_check_time = current_time
+                    bank_coords = self.game_detector.detect_bank_ui(frame)
+                    if bank_coords is not None:
+                        print(f"\n  ❌ BANK UI OPENED! Auto-closing...", flush=True)
+                        screen_x = self.screen_capture.monitor['left'] + int(bank_coords[0])
+                        screen_y = self.screen_capture.monitor['top'] + int(bank_coords[1])
+                        self.input_controller.press_key('SHIFT', duration=0.1)
+                        time.sleep(0.1)
+                        self.input_controller.force_click(screen_x, screen_y)
+                        time.sleep(0.1)
+                        self.input_controller.press_key('SHIFT', duration=0.1)
+                        # Don't execute normal actions this frame
+                        continue
                 
                 # Detect enemies (geometric anchoring)
                 enemies = self.game_detector.detect_enemies(frame)

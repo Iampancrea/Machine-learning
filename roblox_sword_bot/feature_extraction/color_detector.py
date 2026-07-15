@@ -140,7 +140,8 @@ class GameDetector:
         self.bank_template_path = "checkpoints/bank_x_template.png"
         self.bank_template = None
         if os.path.exists(self.bank_template_path):
-            self.bank_template = cv2.imread(self.bank_template_path, cv2.IMREAD_COLOR)
+            tmp_bank = cv2.imread(self.bank_template_path, cv2.IMREAD_COLOR)
+            self.bank_template = cv2.cvtColor(tmp_bank, cv2.COLOR_BGR2RGB)
             print("🏦 Loaded Bank UI Red 'X' template.")
 
     def detect_bank_ui(self, frame: np.ndarray) -> Optional[Tuple[int, int]]:
