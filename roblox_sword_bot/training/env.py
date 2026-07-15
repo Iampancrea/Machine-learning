@@ -123,8 +123,8 @@ class RobloxGymEnv(gym.Env):
         Mouse dx/dy are used directly as continuous values.
         Key/click outputs are thresholded at 0 to produce binary presses.
         """
-        mouse_dx = float(action_vector[0]) * self.mouse_scale
-        mouse_dy = float(action_vector[1]) * self.mouse_scale * 0.05  # Restrict vertical tilt to keep camera level
+        mouse_dx = float(action_vector[0]) * 0.5
+        mouse_dy = float(action_vector[1]) * 0.05  # Restrict vertical tilt to keep camera level
         
         # Threshold continuous outputs into binary key presses
         keys = []

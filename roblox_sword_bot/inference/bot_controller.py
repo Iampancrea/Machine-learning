@@ -152,8 +152,8 @@ class BotController:
             struct_tensor = torch.FloatTensor(structured_features).unsqueeze(0).to(self.device)
             
             if self.is_hybrid:
-                # CNN frame: add batch and channel dims → (1, 1, 60, 80)
-                cnn_tensor = torch.FloatTensor(cnn_frame).unsqueeze(0).unsqueeze(0).to(self.device)
+                # CNN frame: add batch dim → (1, 2, 60, 80) if frame is (2, 60, 80)
+                cnn_tensor = torch.FloatTensor(cnn_frame).unsqueeze(0).to(self.device)
                 outputs = self.model(struct_tensor, cnn_tensor)
             else:
                 outputs = self.model(struct_tensor)

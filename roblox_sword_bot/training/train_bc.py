@@ -180,14 +180,14 @@ class BehaviorCloningTrainer:
                 config=self.config.get('model', {})
             ).to(self.device)
         
-        # Create data loaders
+        # Create data loaders (chronological split to prevent temporal leakage)
         val_split = self.config.get('behavior_cloning', {}).get('validation_split', 0.2)
         val_size = int(len(dataset) * val_split)
         train_size = len(dataset) - val_size
         
-        train_dataset, val_dataset = torch.utils.data.random_split(
-            dataset, [train_size, val_size]
-        )
+        from torch.utils.data import Subset
+        train_dataset = Subset(dataset, range(0, train_size))
+        val_dataset = Subset(dataset, range(train_size, len(dataset)))
         
         train_loader = DataLoader(
             train_dataset, 

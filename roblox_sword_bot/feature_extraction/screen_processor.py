@@ -1,21 +1,19 @@
 """
-Screen capture module using MSS (fast screenshot library)
-Optimized for low-latency capture on integrated graphics
+Screen capture module using DXCam for massive FPS gains
+Optimized for low-latency capture on Windows machines
 
-FIXED: Uses mss.MSS() (non-deprecated) and captures a strict bounding box
-at the OS level instead of grabbing full-screen and resizing after.
+FIXED: Switched from MSS to DXCam as requested in the audit.
 """
 import numpy as np
 import cv2
-from PIL import Image
-import mss
-import mss.tools
+import dxcam
+import pydirectinput as pdi
 from typing import Tuple, Optional
 import time
 
 
 class ScreenCapture:
-    """High-performance screen capture for Roblox gameplay"""
+    """High-performance screen capture for Roblox gameplay using DXCam"""
     
     def __init__(self, resolution: Tuple[int, int] = (800, 600), 
                  region: Optional[Tuple[int, int, int, int]] = None,
@@ -24,8 +22,7 @@ class ScreenCapture:
         Initialize screen capture
         
         Args:
-            resolution: Capture bounding box size (width, height) — grabbed
-                        directly at the OS level. No post-capture resize.
+            resolution: Capture bounding box size (width, height)
             region: Explicit screen region (left, top, width, height).
                     If None, an 800x600 box is centered on the primary monitor.
             fps: Target frames per second
@@ -35,12 +32,11 @@ class ScreenCapture:
         self.fps = fps
         self.frame_interval = 1.0 / fps
         
-        # Initialize MSS — use the non-deprecated class constructor
-        self.sct = mss.MSS()
+        # Initialize DXCam
+        self.camera = dxcam.create(output_color="RGB")
         
         # Build the capture bounding box
         if region is not None:
-            # Explicit region supplied by caller
             self.monitor = {
                 "left": region[0],
                 "top": region[1],
@@ -49,21 +45,29 @@ class ScreenCapture:
             }
         else:
             # Center an (width × height) box on the primary monitor
-            primary = self.sct.monitors[1]  # monitors[0] is "all", [1] is primary
+            screen_w, screen_h = pdi.size()
             cap_w, cap_h = self.target_resolution
-            center_x = primary["left"] + primary["width"] // 2
-            center_y = primary["top"] + primary["height"] // 2
+            center_x = screen_w // 2
+            center_y = screen_h // 2
             self.monitor = {
                 "left": center_x - cap_w // 2,
                 "top": center_y - cap_h // 2,
                 "width": cap_w,
                 "height": cap_h,
             }
+            
+        self.dxcam_region = (
+            self.monitor["left"],
+            self.monitor["top"],
+            self.monitor["left"] + self.monitor["width"],
+            self.monitor["top"] + self.monitor["height"]
+        )
         
-        print(f"Capturing region: {self.monitor}")
+        print(f"Capturing region (DXCam): {self.dxcam_region}")
         
         self.last_capture_time = 0
         self.frame_count = 0
+        self.last_frame = None
         
     def capture(self) -> np.ndarray:
         """
@@ -82,19 +86,21 @@ class ScreenCapture:
         self.last_capture_time = time.time()
         self.frame_count += 1
         
-        # Capture screenshot — already the exact bounding box, no resize needed
-        screenshot = self.sct.grab(self.monitor)
+        # Grab frame with DXCam
+        frame = self.camera.grab(region=self.dxcam_region)
         
-        # Convert to numpy array (BGRA format) properly, avoiding Windows stride/padding issues
-        img = np.frombuffer(screenshot.bgra, dtype=np.uint8).reshape((screenshot.height, screenshot.width, 4))
-        
-        # Remove alpha channel (convert BGRA to BGR)
-        img_bgr = img[:, :, :3]
-        
-        # Convert BGR to RGB
-        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-        
-        return img_rgb
+        # DXCam returns None if the screen hasn't updated.
+        if frame is None:
+            if self.last_frame is not None:
+                return self.last_frame
+            else:
+                # Force wait for the first frame
+                while frame is None:
+                    time.sleep(0.005)
+                    frame = self.camera.grab(region=self.dxcam_region)
+                    
+        self.last_frame = frame
+        return frame
     
     def capture_batch(self, num_frames: int) -> np.ndarray:
         """
@@ -130,8 +136,8 @@ class ScreenCapture:
         
         print(f"Captured {self.frame_count} frames in {elapsed:.2f}s")
         print(f"Average FPS: {avg_fps:.2f}")
-        print(f"Frame shape: {frame.shape}")
-        print(f"Bounding box: {self.monitor}")
+        print(f"Frame shape: {frame.shape if frame is not None else 'None'}")
+        print(f"Bounding box: {self.dxcam_region}")
 
 
 if __name__ == "__main__":
