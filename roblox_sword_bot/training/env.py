@@ -243,10 +243,7 @@ class RobloxGymEnv(gym.Env):
             
             # ── Pain Penalty (Health Drop) [DISABLED FOR NOW] ───────────────────
             if player_health < self.prev_health and not self.is_dead:
-                pass # damage_taken = self.prev_health - player_health
-                # pain_penalty = damage_taken * self.reward_health_drop
-                # step_reward += pain_penalty
-                # print(f"  🩸 TOOK DAMAGE! {damage_taken*100:.0f}%. Penalty: {pain_penalty:.2f}")
+                pass 
             self.prev_health = player_health
             
             # ── Trigger Discipline (Clicking at enemies) ─────────────────
@@ -265,14 +262,24 @@ class RobloxGymEnv(gym.Env):
                 else:
                     step_reward += self.reward_trigger_penalty
             
-            # ── Bank UI Penalty & Auto-Close ─────────────────────────────
+            # ── Bank UI & Follow UI Penalty & Auto-Close ─────────────────────────────
             current_time = time.time()
             if not self.is_dead and (current_time - getattr(self, 'last_bank_check_time', 0.0) >= 1.0):
                 self.last_bank_check_time = current_time
-                bank_coords = self.game_detector.detect_bank_ui(frame)
-                if bank_coords is not None:
+                
+                # Check for Bank UI
+                ui_coords = self.game_detector.detect_bank_ui(frame)
+                is_bank = True
+                
+                # Check for Follow UI if Bank UI isn't open
+                if ui_coords is None:
+                    ui_coords = self.game_detector.detect_follow_ui(frame)
+                    is_bank = False
+                
+                if ui_coords is not None:
                     step_reward -= 5.0
-                    print(f"  ❌ BANK UI OPENED! -5.0 penalty applied. Auto-closing...")
+                    ui_name = "BANK" if is_bank else "FOLLOW"
+                    print(f"  ❌ {ui_name} UI OPENED! -5.0 penalty applied. Auto-closing...")
                     
                     # Convert internal 800x600 coordinates to actual screen coordinates
                     # The capture region starts at (192, 156) for the 1536x888 window
@@ -286,8 +293,8 @@ class RobloxGymEnv(gym.Env):
                         from feature_extraction.screen_processor import ScreenCapture
                         # Calculate precise absolute screen coordinates by adding the capture region offset
                         # Since the frame is exactly the capture resolution, no scaling is needed.
-                        screen_x = self.screen_capture.monitor['left'] + int(bank_coords[0])
-                        screen_y = self.screen_capture.monitor['top'] + int(bank_coords[1])
+                        screen_x = self.screen_capture.monitor['left'] + int(ui_coords[0])
+                        screen_y = self.screen_capture.monitor['top'] + int(ui_coords[1])
                         # To click UI in Roblox, we must temporarily break out of Shift Lock
                         self.input_controller.press_key('SHIFT', duration=0.1)
                         time.sleep(0.1) # Wait for Roblox to unlock cursor
@@ -345,6 +352,10 @@ class RobloxGymEnv(gym.Env):
                         step_reward += self.reward_safe_zone_leave
                         self.has_left_safe_zone = True
                         print(f"  🏃 LEFT SAFE ZONE! +{self.reward_safe_zone_leave} reward")
+                    else:
+                        # Leaving again after a re-entry → offset the re-entry penalty to prevent infinite penalty loop
+                        step_reward += abs(self.reward_safe_zone_reenter)
+                        print(f"  🏃 LEFT SAFE ZONE AGAIN! +{abs(self.reward_safe_zone_reenter)} reward")
                 
                 # Transition: was outside → now back in safe zone = COWARDICE
                 if not self.prev_in_safe_zone and in_safe_zone:

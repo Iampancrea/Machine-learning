@@ -144,6 +144,14 @@ class GameDetector:
             self.bank_template = cv2.cvtColor(tmp_bank, cv2.COLOR_BGR2RGB)
             print("🏦 Loaded Bank UI Red 'X' template.")
 
+        # ── Follow UI Template Setup ──────────────────────────────────
+        self.follow_template_path = "checkpoints/follow_x_template.png"
+        self.follow_template = None
+        if os.path.exists(self.follow_template_path):
+            tmp_follow = cv2.imread(self.follow_template_path, cv2.IMREAD_COLOR)
+            self.follow_template = cv2.cvtColor(tmp_follow, cv2.COLOR_BGR2RGB)
+            print("📱 Loaded Follow UI Red 'X' template.")
+
     def detect_bank_ui(self, frame: np.ndarray) -> Optional[Tuple[int, int]]:
         """
         Detects if the massive Bank UI is open by template matching the Red 'X' button.
@@ -158,6 +166,26 @@ class GameDetector:
         # 0.8 is a solid threshold for identical UI elements
         if max_val > 0.8:
             h, w = self.bank_template.shape[:2]
+            center_x = max_loc[0] + w // 2
+            center_y = max_loc[1] + h // 2
+            return (center_x, center_y)
+            
+        return None
+
+    def detect_follow_ui(self, frame: np.ndarray) -> Optional[Tuple[int, int]]:
+        """
+        Detects if the Follow Us UI is open by template matching its Red 'X' button.
+        Returns the (x, y) coordinates of the center of the Red 'X' if found, else None.
+        """
+        if self.follow_template is None:
+            return None
+            
+        res = cv2.matchTemplate(frame, self.follow_template, cv2.TM_CCOEFF_NORMED)
+        min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
+        
+        # 0.8 is a solid threshold for identical UI elements
+        if max_val > 0.8:
+            h, w = self.follow_template.shape[:2]
             center_x = max_loc[0] + w // 2
             center_y = max_loc[1] + h // 2
             return (center_x, center_y)

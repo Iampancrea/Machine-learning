@@ -118,8 +118,8 @@ reinforcement_learning:
   steps_per_episode: 500
   gamma: 0.99           # Discount factor
   learning_rate: 0.0003  # SAC default (3e-4)
-  buffer_size: 10000     # Replay buffer size (reduced to prevent 4.5GB RAM allocation error)
-  learning_starts: 500   # Random exploration steps before learning begins
+  buffer_size: 10000     # Replay buffer size (reverted to prevent 9GB RAM allocation error)
+  learning_starts: 1000   # Random exploration steps before learning begins
   batch_size: 64         # Mini-batch size for gradient updates
   tau: 0.005             # Soft update coefficient for target networks
   

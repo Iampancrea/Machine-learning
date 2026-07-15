@@ -189,14 +189,24 @@ class BotController:
                 frame = self.screen_capture.capture()
                 current_time = time.time()
                 
-                # Detect and handle Bank UI (auto-close) - throttled to save CPU
+                # Detect and handle UI popups (auto-close) - throttled to save CPU
                 if current_time - last_bank_check_time >= 1.0:
                     last_bank_check_time = current_time
-                    bank_coords = self.game_detector.detect_bank_ui(frame)
-                    if bank_coords is not None:
-                        print(f"\n  ❌ BANK UI OPENED! Auto-closing...", flush=True)
-                        screen_x = self.screen_capture.monitor['left'] + int(bank_coords[0])
-                        screen_y = self.screen_capture.monitor['top'] + int(bank_coords[1])
+                    
+                    # Check for Bank UI
+                    ui_coords = self.game_detector.detect_bank_ui(frame)
+                    is_bank = True
+                    
+                    # Check for Follow UI if Bank UI isn't open
+                    if ui_coords is None:
+                        ui_coords = self.game_detector.detect_follow_ui(frame)
+                        is_bank = False
+                    
+                    if ui_coords is not None:
+                        ui_name = "BANK" if is_bank else "FOLLOW"
+                        print(f"\n  ❌ {ui_name} UI OPENED! Auto-closing...", flush=True)
+                        screen_x = self.screen_capture.monitor['left'] + int(ui_coords[0])
+                        screen_y = self.screen_capture.monitor['top'] + int(ui_coords[1])
                         self.input_controller.press_key('SHIFT', duration=0.1)
                         time.sleep(0.1)
                         self.input_controller.force_click(screen_x, screen_y)

@@ -93,7 +93,18 @@ class RLTrainer:
             net_arch=dict(pi=hidden_layers, qf=hidden_layers)  # Actor and Q-function branches
         )
         
-        device = self.config.get('hardware', {}).get('device', 'cpu')
+        # Try to use Intel XPU via IPEX if available
+        try:
+            import intel_extension_for_pytorch as ipex
+            if hasattr(torch, 'xpu') and torch.xpu.is_available():
+                device = "xpu"
+                print("\n🚀 IPEX (Intel XPU) detected! Hardware acceleration enabled.")
+            else:
+                device = self.config.get('hardware', {}).get('device', 'cpu')
+        except ImportError:
+            device = self.config.get('hardware', {}).get('device', 'cpu')
+            
+
         
         # Check if we can resume training
         latest_checkpoint = find_latest_checkpoint(save_dir)
