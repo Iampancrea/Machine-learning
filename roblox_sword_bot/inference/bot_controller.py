@@ -42,36 +42,65 @@ class BotController:
         
         # Load model checkpoint
         checkpoint = torch.load(model_path, map_location=self.device)
-        self.num_actions = checkpoint['num_actions']
-        self.action_mapping = checkpoint.get('action_mapping', None)
-        model_type = checkpoint.get('model_type', 'mlp')
         
-        # Initialize model architecture based on checkpoint type
-        if model_type == 'hybrid':
-            structured_dim = checkpoint.get('structured_dim', 38)
-            self.model = HybridNetwork(
-                structured_dim=structured_dim,
-                cnn_output_dim=self.config.get('model', {}).get('cnn_output_dim', 32),
-                hidden_layers=self.config.get('model', {}).get('hidden_layers', [128, 64]),
-                output_dim=self.num_actions,
-                dropout=0.0  # No dropout at inference
+        # Check if this is a Decision Transformer (no dict wrapper, or specific key)
+        self.is_dt = 'transformer.layers.0.self_attn.in_proj_weight' in checkpoint or 'pos_emb.weight' in checkpoint
+        
+        if self.is_dt:
+            from models.decision_transformer import DecisionTransformer
+            self.model = DecisionTransformer(
+                struct_dim=15, 
+                cnn_channels=self.config.get('features', {}).get('cnn_frame_stack', 4) + 1,
+                action_dim=9,
+                max_length=self.config.get('dt', {}).get('context_len', 32)
             ).to(self.device)
-            self.is_hybrid = True
-        else:
-            feature_history = self.config.get('features', {}).get('feature_history_length', 10)
-            input_dim = checkpoint.get('structured_dim', feature_history * 15)
-            self.model = MLPNetwork(
-                input_dim=input_dim,
-                hidden_layers=self.config.get('model', {}).get('hidden_layers', [256, 128, 64]),
-                output_dim=self.num_actions
-            ).to(self.device)
+            self.model.load_state_dict(checkpoint)
+            
+            # Context buffers for autoregressive inference
+            self.dt_context_len = self.config.get('dt', {}).get('context_len', 32)
+            self.target_rtg = self.config.get('dt', {}).get('target_rtg', 1.0)
+            
+            self.struct_buf = []
+            self.cnn_buf = []
+            self.act_buf = []
+            self.rtg_buf = []
             self.is_hybrid = False
+            
+        else:
+            self.num_actions = checkpoint['num_actions']
+            self.action_mapping = checkpoint.get('action_mapping', None)
+            model_type = checkpoint.get('model_type', 'mlp')
+            
+            # Initialize model architecture based on checkpoint type
+            if model_type == 'hybrid':
+                structured_dim = checkpoint.get('structured_dim', 38)
+                self.model = HybridNetwork(
+                    structured_dim=structured_dim,
+                    cnn_output_dim=self.config.get('model', {}).get('cnn_output_dim', 32),
+                    hidden_layers=self.config.get('model', {}).get('hidden_layers', [128, 64]),
+                    output_dim=self.num_actions,
+                    dropout=0.0  # No dropout at inference
+                ).to(self.device)
+                self.is_hybrid = True
+            else:
+                feature_history = self.config.get('features', {}).get('feature_history_length', 10)
+                input_dim = checkpoint.get('structured_dim', feature_history * 15)
+                self.model = MLPNetwork(
+                    input_dim=input_dim,
+                    hidden_layers=self.config.get('model', {}).get('hidden_layers', [256, 128, 64]),
+                    output_dim=self.num_actions
+                ).to(self.device)
+                self.is_hybrid = False
+            
+            self.model.load_state_dict(checkpoint['model_state_dict'])
         
-        self.model.load_state_dict(checkpoint['model_state_dict'])
         self.model.eval()
         
         print(f"Model loaded successfully ({sum(p.numel() for p in self.model.parameters()):,} parameters)")
-        print(f"Model type: {'hybrid (structured + CNN)' if self.is_hybrid else 'MLP only'}")
+        if self.is_dt:
+            print("Model type: Decision Transformer (Autoregressive Sequence)")
+        else:
+            print(f"Model type: {'hybrid (structured + CNN)' if self.is_hybrid else 'MLP only'}")
         
         # Initialize components
         self.screen_capture = ScreenCapture(
@@ -149,6 +178,63 @@ class BotController:
             Tuple of (action_dict, confidence)
         """
         with torch.no_grad():
+            if self.is_dt:
+                # Append current state to buffer
+                struct_tensor = torch.FloatTensor(structured_features).to(self.device)
+                cnn_tensor = torch.FloatTensor(cnn_frame).to(self.device)
+                
+                # Append current RTG target
+                rtg_tensor = torch.FloatTensor([self.target_rtg]).to(self.device)
+                
+                # If first step, use zeros for previous action
+                if not self.act_buf:
+                    act_tensor = torch.zeros(9).to(self.device)
+                else:
+                    act_tensor = self.act_buf[-1] # previous action
+                    
+                self.struct_buf.append(struct_tensor)
+                self.cnn_buf.append(cnn_tensor)
+                self.act_buf.append(act_tensor)
+                self.rtg_buf.append(rtg_tensor)
+                
+                # Truncate to context length
+                if len(self.struct_buf) > self.dt_context_len:
+                    self.struct_buf.pop(0)
+                    self.cnn_buf.pop(0)
+                    self.act_buf.pop(0)
+                    self.rtg_buf.pop(0)
+                    
+                # Stack sequences
+                s_seq = torch.stack(self.struct_buf)
+                c_seq = torch.stack(self.cnn_buf)
+                a_seq = torch.stack(self.act_buf)
+                r_seq = torch.stack(self.rtg_buf)
+                
+                action = self.model.get_action(s_seq, c_seq, a_seq, r_seq, deterministic=True)
+                
+                # Apply base scaling for gameplay
+                action['mouse_dx'] *= 0.5
+                action['mouse_dy'] *= 0.05
+                
+                # For DT, we overwrite the last recorded action with the actual predicted action 
+                # for the next step's input to be accurate
+                
+                new_act = torch.zeros(9).to(self.device)
+                key_map = {'W': 0, 'A': 1, 'S': 2, 'D': 3, 'Space': 4}
+                for k in action['keys']:
+                    if k in key_map:
+                        new_act[key_map[k]] = 1.0
+                new_act[5] = 1.0 if action['click_left'] else 0.0
+                new_act[6] = 1.0 if action['click_right'] else 0.0
+                new_act[7] = float(action['mouse_dx'] / 0.5)
+                new_act[8] = float(action['mouse_dy'] / 0.05)
+                self.act_buf[-1] = new_act
+                
+                # DT confidence is assumed high, though we could measure entropy
+                confidence = 1.0
+                return action, confidence
+
+            # --- Legacy BC Inference (Hybrid/MLP) ---
             struct_tensor = torch.FloatTensor(structured_features).unsqueeze(0).to(self.device)
             
             if self.is_hybrid:

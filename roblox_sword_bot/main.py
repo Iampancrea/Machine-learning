@@ -33,7 +33,7 @@ Examples:
     )
     
     parser.add_argument('command', 
-                       choices=['record', 'train_bc', 'train_rl', 'run', 'test', 'dagger'],
+                       choices=['record', 'train_bc', 'train_dt', 'train_rl', 'run', 'test', 'dagger'],
                        help='Command to execute')
     parser.add_argument('--config', type=str, default='configs/default_config.yaml',
                        help='Path to configuration file')
@@ -79,6 +79,8 @@ Examples:
         run_recording(args)
     elif args.command == 'train_bc':
         run_behavior_cloning(args)
+    elif args.command == 'train_dt':
+        run_dt_training(args)
     elif args.command == 'train_rl':
         run_reinforcement_learning(args)
     elif args.command == 'run':
@@ -222,6 +224,25 @@ def run_recording(args):
             traceback.print_exc()
         sys.exit(1)
 
+
+def run_dt_training(args):
+    """Run Decision Transformer offline RL training"""
+    from training.train_dt import train_dt
+    
+    class DTArgs:
+        data = 'data/dataset_rtg.h5'
+        batch_size = 32
+        context_len = 32
+        epochs = 10
+        lr = 1e-4
+        workers = 0
+    
+    print("\n🧠 Starting Decision Transformer Training...")
+    try:
+        train_dt(DTArgs())
+    except KeyboardInterrupt:
+        print("\nTraining interrupted by user")
+        sys.exit(0)
 
 def run_behavior_cloning(args):
     """Train behavior cloning model"""
