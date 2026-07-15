@@ -168,8 +168,6 @@ class RobloxGymEnv(gym.Env):
             
         # Ensure sword is equipped on spawn/respawn
         self.input_controller.press_key('1', duration=0.2)
-        time.sleep(0.1)
-        self.input_controller.press_key('1', duration=0.2)
         
         self.is_dead = False
         self.kill_cooldown = 0
