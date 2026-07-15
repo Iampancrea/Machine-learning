@@ -91,6 +91,19 @@ class GameDetector:
         self.kill_log_region = kl_cfg.get("screen_region", [350, 795, 1186, 93])
         self.kill_log_confidence = kl_cfg.get("confidence_threshold", 0.4)
         self.kill_log_dedup_timeout = kl_cfg.get("dedup_timeout_seconds", 4.0)
+        
+        # ── Pixel-Hash / Template Setup ─────────────────────────────
+        self.kill_template_path = kl_cfg.get("kill_template_path", "checkpoints/kill_log_template.png")
+        self.kill_template = None
+        self.kill_match_threshold = kl_cfg.get("match_threshold", 0.75)
+        
+        if not self.use_ocr:
+            import os
+            if os.path.exists(self.kill_template_path):
+                self.kill_template = cv2.imread(self.kill_template_path, cv2.IMREAD_GRAYSCALE)
+                print(f"🔪 Loaded Kill Log pixel-hash template from: {self.kill_template_path}")
+            else:
+                print(f"⚠️ Kill Log template not found at {self.kill_template_path}! Kill logging is effectively disabled.")
 
         # Deduplication: track recently seen kill/death events
         # Each entry is (event_text_hash, timestamp)
@@ -115,6 +128,23 @@ class GameDetector:
         # ── Enemy Detection Setup ────────────────────────────────────
         ed_cfg = features_cfg.get('enemy_detection', {})
         self.enemy_detection_enabled = ed_cfg.get("enabled", True)
+        self.use_yolo = ed_cfg.get("use_yolo", False)
+        self.yolo_model_path = ed_cfg.get("yolo_model_path", "checkpoints/best.pt")
+        self.yolo_model = None
+        
+        if self.use_yolo:
+            try:
+                from ultralytics import YOLO
+                import os
+                if os.path.exists(self.yolo_model_path):
+                    self.yolo_model = YOLO(self.yolo_model_path)
+                    print(f"🎯 Loaded YOLOv8 enemy detector from {self.yolo_model_path}")
+                else:
+                    print(f"⚠️ YOLO model not found at {self.yolo_model_path}. Falling back to HSV.")
+                    self.use_yolo = False
+            except ImportError:
+                print("⚠️ ultralytics not installed. Falling back to HSV. Run 'pip install ultralytics'")
+                self.use_yolo = False
         self.hp_hsv_lower = np.array(ed_cfg.get("hp_text_hsv_lower", [35, 80, 150]))
         self.hp_hsv_upper = np.array(ed_cfg.get("hp_text_hsv_upper", [85, 255, 255]))
         self.ed_min_area = ed_cfg.get("min_contour_area", 15)
@@ -212,7 +242,50 @@ class GameDetector:
         """
         default_result = {'kill': False, 'death': False, 'killer': '', 'victim': ''}
 
-        if not self.use_ocr or self.reader is None:
+        if not self.use_ocr:
+            # --- Pixel-Hash / Template Matching Fast Path ---
+            if self.kill_template is None:
+                return default_result
+                
+            try:
+                region = self.kill_log_region
+                monitor = {"left": region[0], "top": region[1], "width": region[2], "height": region[3]}
+                screenshot = self._sct.grab(monitor)
+                roi = np.array(screenshot)[:, :, :3]
+                gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+                
+                # Match template (the user's name in the specific kill font/color)
+                res = cv2.matchTemplate(gray, self.kill_template, cv2.TM_CCOEFF_NORMED)
+                _, max_val, _, max_loc = cv2.minMaxLoc(res)
+                
+                if max_val > self.kill_match_threshold:
+                    now = time.time()
+                    
+                    # Deduplication (using X coordinate as a primitive hash to prevent spam)
+                    event_hash = max_loc[0] // 50 
+                    
+                    while self._recent_events and (now - self._recent_events[0][1]) > self.kill_log_dedup_timeout:
+                        self._recent_events.popleft()
+                        
+                    recent_hashes = {h for h, _ in self._recent_events}
+                    if event_hash in recent_hashes:
+                        return default_result
+                        
+                    self._recent_events.append((event_hash, now))
+                    
+                    # Without OCR we can't tell if we killed or died easily, 
+                    # but typically if our name is on the left side of the log, it's a kill.
+                    # We'll just assume a generic "kill" event if we see our name in the log
+                    # and let the reward function handle it.
+                    print(f"    [Pixel-Hash] Kill Log Match! Confidence: {max_val:.2f}")
+                    return {'kill': True, 'death': False, 'killer': self.player_name, 'victim': 'someone'}
+            except Exception:
+                pass
+                
+            return default_result
+
+        # --- Legacy OCR Path ---
+        if self.reader is None:
             return default_result
 
         try:
@@ -407,6 +480,31 @@ class GameDetector:
             return []
 
         height, width = frame.shape[:2]
+        
+        # --- YOLO Fast Path ---
+        if self.use_yolo and self.yolo_model is not None:
+            results = self.yolo_model(frame, verbose=False)[0]
+            enemies = []
+            for box in results.boxes:
+                # Assuming class 0 is 'enemy' or 'player'
+                if box.conf[0] > 0.5:
+                    x1, y1, x2, y2 = map(int, box.xyxy[0])
+                    cx = (x1 + x2) // 2
+                    cy = (y1 + y2) // 2
+                    # Tag center is usually at the top of the bounding box
+                    enemies.append({
+                        'player_center': (cx, cy),
+                        'tag_center': (cx, y1),
+                        'hp_pct': 1.0,
+                        'hp_bar': (x1, y1, x2 - x1, y2 - y1),
+                        'text_confidence': float(box.conf[0])
+                    })
+            
+            # Simple player exclusion (ignore center-bottom)
+            enemies = [e for e in enemies if not (abs(e['player_center'][0] - width//2) < 60 and e['player_center'][1] > height * 0.7)]
+            return enemies
+
+        # --- Legacy HSV Path ---
 
         # Convert to HSV
         hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)

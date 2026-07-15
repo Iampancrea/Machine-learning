@@ -139,11 +139,11 @@ class BotController:
     def predict_action(self, structured_features: np.ndarray,
                       cnn_frame: np.ndarray) -> tuple:
         """
-        Predict action from features
+        Predict action from features (with MC-Dropout Uncertainty Estimation)
         
         Args:
             structured_features: 1D feature vector from FeatureEngineer
-            cnn_frame: 2D grayscale frame (60, 80) from FeatureEngineer
+            cnn_frame: 2D grayscale frame (5, 60, 80) from FeatureEngineer
             
         Returns:
             Tuple of (action_dict, confidence)
@@ -152,22 +152,40 @@ class BotController:
             struct_tensor = torch.FloatTensor(structured_features).unsqueeze(0).to(self.device)
             
             if self.is_hybrid:
-                # CNN frame: add batch dim → (1, 2, 60, 80) if frame is (2, 60, 80)
                 cnn_tensor = torch.FloatTensor(cnn_frame).unsqueeze(0).to(self.device)
-                outputs = self.model(struct_tensor, cnn_tensor)
+                
+                # --- MC-Dropout for Uncertainty Estimation ---
+                self.model.train()  # Enable dropout
+                mc_runs = 3
+                mouse_preds = []
+                for _ in range(mc_runs):
+                    _, _, m_out = self.model(struct_tensor, cnn_tensor)
+                    mouse_preds.append(m_out)
+                
+                self.model.eval()  # Back to inference mode
+                
+                stacked = torch.stack(mouse_preds)
+                variance = torch.var(stacked, dim=0).mean().item()
+                
+                # High variance = low confidence (OOD). Max variance for Tanh is ~1.0
+                confidence = max(0.0, 1.0 - (variance * 2.0))
+                
+                # Get actual action
+                action = self.model.get_action(struct_tensor, cnn_tensor, deterministic=True)
+                
+                # Apply base scaling for gameplay (as requested in Quick Wins)
+                action['mouse_dx'] *= 0.5
+                action['mouse_dy'] *= 0.05
+                
+                return action, confidence
             else:
+                # Legacy MLP Support
                 outputs = self.model(struct_tensor)
-            
-            probs = torch.softmax(outputs, dim=1)
-            confidence, predicted = torch.max(probs, 1)
-            action_idx = predicted.item()
-            conf = confidence.item()
-            
-            if conf < self.confidence_threshold:
-                return {'keys': [], 'mouse_dx': 0, 'mouse_dy': 0, 'click_left': False, 'click_right': False, 'click': False}, conf
-            
-            action = self._decode_action(action_idx)
-            return action, conf
+                probs = torch.softmax(outputs, dim=1)
+                confidence, predicted = torch.max(probs, 1)
+                action_idx = predicted.item()
+                conf = confidence.item()
+                return self._decode_action(action_idx), conf
     
     def run(self):
         """Main bot loop"""

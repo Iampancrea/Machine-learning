@@ -207,13 +207,13 @@ class HybridNetwork(nn.Module):
     """
     Combines structured features (GameDetector/FeatureEngineer outputs)
     with spatial features (SpatialCNN on raw frames).
-    Two streams, one brain — the spicy fusion model.
+    Multi-headed continuous output: keys (5), clicks (2), mouse (2).
     """
 
     def __init__(self, structured_dim: int,
                  cnn_output_dim: int = 32,
+                 cnn_channels: int = 5,
                  hidden_layers: List[int] = [128, 64],
-                 output_dim: int = 8,
                  dropout: float = 0.1):
         """
         Initialize HybridNetwork
@@ -221,19 +221,18 @@ class HybridNetwork(nn.Module):
         Args:
             structured_dim: Dimensionality of structured feature vector
             cnn_output_dim: Output dim of the SpatialCNN branch
+            cnn_channels: Input channels for CNN (e.g. 5 for stacked frames)
             hidden_layers: Hidden layer sizes for the fusion MLP head
-            output_dim: Number of output actions
             dropout: Dropout probability
         """
         super(HybridNetwork, self).__init__()
 
         self.structured_dim = structured_dim
-        self.output_dim = output_dim
 
         # Spatial feature extractor
-        self.cnn = SpatialCNN(output_dim=cnn_output_dim)
+        self.cnn = SpatialCNN(output_dim=cnn_output_dim, in_channels=cnn_channels)
 
-        # Fusion MLP — built fresh to avoid double-printing from MLPNetwork
+        # Fusion MLP
         combined_dim = structured_dim + cnn_output_dim
         mlp_layers = []
         prev_dim = combined_dim
@@ -242,50 +241,75 @@ class HybridNetwork(nn.Module):
             mlp_layers.append(nn.ReLU())
             mlp_layers.append(nn.Dropout(dropout))
             prev_dim = h_dim
-        mlp_layers.append(nn.Linear(prev_dim, output_dim))
-        self.mlp_head = nn.Sequential(*mlp_layers)
+        
+        self.shared_mlp = nn.Sequential(*mlp_layers)
+        
+        # Multi-headed outputs
+        self.key_head = nn.Linear(prev_dim, 5)   # W, A, S, D, SPACE
+        self.click_head = nn.Linear(prev_dim, 2) # Left, Right
+        self.mouse_head = nn.Sequential(
+            nn.Linear(prev_dim, 2),
+            nn.Tanh() # Bound mouse dx/dy to [-1.0, 1.0]
+        )
 
         self.num_params = sum(p.numel() for p in self.parameters())
         print(f"HybridNetwork initialized with {self.num_params:,} total parameters")
 
     def forward(self, structured_features: torch.Tensor,
-                cnn_frames: torch.Tensor) -> torch.Tensor:
+                cnn_frames: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Forward pass — fuse structured + spatial streams
 
         Args:
             structured_features: (batch_size, structured_dim)
-            cnn_frames: (batch_size, 1, 60, 80) grayscale frames
+            cnn_frames: (batch_size, cnn_channels, 60, 80) grayscale frames
 
         Returns:
-            Action logits of shape (batch_size, output_dim)
+            Tuple of (keys_logits, clicks_logits, mouse_continuous)
         """
         cnn_out = self.cnn(cnn_frames)
         combined = torch.cat([structured_features, cnn_out], dim=1)
-        return self.mlp_head(combined)
+        shared = self.shared_mlp(combined)
+        
+        keys_logits = self.key_head(shared)
+        clicks_logits = self.click_head(shared)
+        mouse_continuous = self.mouse_head(shared)
+        
+        return keys_logits, clicks_logits, mouse_continuous
 
     def get_action(self, structured_features: torch.Tensor,
                    cnn_frames: torch.Tensor,
-                   deterministic: bool = False) -> torch.Tensor:
+                   deterministic: bool = False) -> dict:
         """
-        Get action from dual-stream input
+        Get action dict from dual-stream input
 
         Args:
             structured_features: Structured state features
             cnn_frames: Raw grayscale frames
-            deterministic: If True, use argmax; otherwise sample
+            deterministic: For continuous/multihot, we use thresholds for discrete, and raw for continuous.
 
         Returns:
-            Action tensor
+            Dictionary with parsed actions.
         """
         with torch.no_grad():
-            logits = self.forward(structured_features, cnn_frames)
-
-            if deterministic:
-                return torch.argmax(logits, dim=-1)
-            else:
-                probs = F.softmax(logits, dim=-1)
-                return torch.multinomial(probs, 1).squeeze(-1)
+            keys_logits, clicks_logits, mouse_continuous = self.forward(structured_features, cnn_frames)
+            
+            # Threshold logits at 0.0 for binary presses (Sigmoid > 0.5 is equivalent to logit > 0.0)
+            keys_binary = (keys_logits > 0.0).float().squeeze(0)
+            clicks_binary = (clicks_logits > 0.0).float().squeeze(0)
+            mouse_vals = mouse_continuous.squeeze(0)
+            
+            # Key mapping
+            key_names = ["W", "A", "S", "D", "SPACE"]
+            active_keys = [name for name, val in zip(key_names, keys_binary) if val == 1.0]
+            
+            return {
+                'keys': active_keys,
+                'click_left': bool(clicks_binary[0] == 1.0),
+                'click_right': bool(clicks_binary[1] == 1.0),
+                'mouse_dx': float(mouse_vals[0]),
+                'mouse_dy': float(mouse_vals[1])
+            }
 
 
 if __name__ == "__main__":

@@ -44,15 +44,18 @@ features:
     white_threshold: 200  # Min value in all RGB channels to count as "white"
     min_white_ratio: 0.03  # At least 3% white pixels in text ROI
   
-  # Kill log detection (OCR on bottom-right of FULL SCREEN)
+  # Kill log detection (Pixel Hash / OCR on bottom-right of FULL SCREEN)
   kill_log:
     enabled: true
+    use_ocr: false  # Disabled for performance. Uses Pixel Hash/Template Matching instead.
     player_name: "sagupaam6"  # Your Roblox username for kill detection
+    kill_template_path: "checkpoints/kill_log_template.png"  # Create a crop of your name in the kill log
+    match_threshold: 0.75
     # Absolute screen coordinates for the kill log ROI (bottom-right corner)
     # For 1920x1200 screen (physical coordinates scanned by mss):
     screen_region: [1300, 1080, 620, 60]  # [left, top, width, height]
     confidence_threshold: 0.4
-    scan_interval_frames: 45  # OCR every 45 frames (less CPU usage)
+    scan_interval_frames: 45  # Scan every 45 frames
     dedup_timeout_seconds: 4.0  # Ignore duplicate kill log lines within this window
 
   # Player death detection (health bar in top-right corner)

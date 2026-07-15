@@ -33,7 +33,7 @@ Examples:
     )
     
     parser.add_argument('command', 
-                       choices=['record', 'train_bc', 'train_rl', 'run', 'test'],
+                       choices=['record', 'train_bc', 'train_rl', 'run', 'test', 'dagger'],
                        help='Command to execute')
     parser.add_argument('--config', type=str, default='configs/default_config.yaml',
                        help='Path to configuration file')
@@ -85,8 +85,30 @@ Examples:
         run_bot(args)
     elif args.command == 'test':
         run_tests(args)
+    elif args.command == 'dagger':
+        run_dagger(args)
     else:
         print(f"Unknown command: {args.command}")
+        sys.exit(1)
+
+def run_dagger(args):
+    """Run DAgger loop for expert correction"""
+    print("\n🗡️ Launching DAgger...")
+    if not args.model:
+        print("❌ Error: --model argument required for DAgger")
+        sys.exit(1)
+        
+    try:
+        from data_collection.dagger import DAggerLoop
+        from utils.config import load_config
+        config = load_config(args.config)
+        dagger = DAggerLoop(args.model, config.config)
+        dagger.run(duration=args.duration)
+    except Exception as e:
+        print(f"\n❌ Error during DAgger: {e}")
+        if args.debug:
+            import traceback
+            traceback.print_exc()
         sys.exit(1)
 
 

@@ -55,26 +55,59 @@ class GameplayDataset(Dataset):
             
             # Parse actions from JSON
             actions = [json.dumps(a) if isinstance(a, dict) else a for a in actions_json]
-            
-            self.features_list.append(features)
-            self.actions_list.extend(actions)
-        
-        # Concatenate all features and CNN frames
-        self.features = np.concatenate(self.features_list, axis=0)
-        self.cnn_frames = np.concatenate(self.cnn_frames_list, axis=0)
+        self._load_data()
         
         # Parse actions into tensors
-        self.actions = self._parse_actions()
+        self.actions_keys, self.actions_clicks, self.actions_mouse = self._parse_actions()
         
         print(f"Loaded {len(self.features)} total samples")
         print(f"Structured feature shape: {self.features.shape}")
         print(f"CNN frame shape: {self.cnn_frames.shape}")
-        print(f"Action classes: {len(self.action_mapping)}")
-    
-    def _parse_actions(self) -> torch.Tensor:
-        """Parse action strings into class labels"""
-        all_actions = set()
-        parsed_actions = []
+        
+    def _load_data(self):
+        # Check for HDF5 dataset first (Cloud optimization)
+        h5_path = self.data_dir.parent / 'dataset.h5'
+        if h5_path.exists():
+            print(f"Loading optimized HDF5 dataset from {h5_path}")
+            import h5py
+            # For simplicity in this demo, load into RAM. True streaming requires keeping h5f open.
+            with h5py.File(h5_path, 'r') as h5f:
+                self.features = np.array(h5f['features'])
+                self.cnn_frames = np.array(h5f['cnn_frames'])
+                self.actions_list = [a.decode('utf-8') if isinstance(a, bytes) else a for a in h5f['actions']]
+            return
+
+        # Fallback to NPZ directory loading
+        npz_files = list(self.data_dir.glob('*.npz'))
+        if not npz_files:
+            raise FileNotFoundError(f"No recording files found in {self.data_dir}")
+            
+        print(f"Loading {len(npz_files)} recording files...")
+        for f in npz_files:
+            try:
+                with np.load(f, allow_pickle=True) as data:
+                    self.features_list.append(data['features'])
+                    self.cnn_frames_list.append(data['cnn_frames'])
+                    
+                    if 'actions' in data:
+                        actions = data['actions']
+                        if len(actions) > 0 and isinstance(actions[0], dict):
+                            self.actions_list.extend([json.dumps(a) for a in actions])
+                        else:
+                            self.actions_list.extend(actions)
+            except Exception as e:
+                print(f"Error loading {f}: {e}")
+                
+        if not self.features_list:
+            raise ValueError("No valid data loaded")
+            
+        self.features = np.concatenate(self.features_list, axis=0)
+        self.cnn_frames = np.concatenate(self.cnn_frames_list, axis=0)
+
+    def _parse_actions(self) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Parse action strings into multi-hot and continuous tensors"""
+        keys_list, clicks_list, mouse_list = [], [], []
+        valid_keys = ["w", "a", "s", "d", "space"]
         
         for action_json in self.actions_list:
             try:
@@ -83,32 +116,29 @@ class GameplayDataset(Dataset):
                 else:
                     action = action_json
                 
-                # Convert action to string key
-                raw_keys = action.get('keys', [])
-                junk = {'alt', 'e', 'shift', 'tab', 'ALT', 'E', 'SHIFT', 'TAB',
-                        'KEY.SHIFT', 'KEY.TAB', 'KEY.ALT', 'KEY.ALT_L', 'KEY.ALT_R',
-                        'KEY.F2', 'KEY.CTRL', 'KEY.CTRL_L', 'KEY.ESC'}
-                keys = sorted([k for k in raw_keys if k not in junk])
-                click_left = 1 if action.get('click_left', action.get('click', False)) else 0
-                click_right = 1 if action.get('click_right', False) else 0
-                mouse_dx = 1 if action.get('mouse_dx', 0) > 0.005 else (-1 if action.get('mouse_dx', 0) < -0.005 else 0)
-                mouse_dy = 1 if action.get('mouse_dy', 0) > 0.005 else (-1 if action.get('mouse_dy', 0) < -0.005 else 0)
+                raw_keys = [str(k).lower() for k in action.get('keys', [])]
+                key_vec = [1.0 if k in raw_keys else 0.0 for k in valid_keys]
                 
-                action_key = f"{','.join(keys)}_{click_left}_{click_right}_{mouse_dx}_{mouse_dy}"
-                all_actions.add(action_key)
-                parsed_actions.append(action_key)
+                click_left = 1.0 if action.get('click_left', action.get('click', False)) else 0.0
+                click_right = 1.0 if action.get('click_right', False) else 0.0
+                
+                mouse_dx = float(action.get('mouse_dx', 0.0))
+                mouse_dy = float(action.get('mouse_dy', 0.0))
+                
+                keys_list.append(key_vec)
+                clicks_list.append([click_left, click_right])
+                mouse_list.append([mouse_dx, mouse_dy])
             except Exception as e:
                 print(f"⚠️ Warning: Failed to parse action {action_json}. Error: {e}")
-                parsed_actions.append("none_0_0_0_0")
+                keys_list.append([0.0] * 5)
+                clicks_list.append([0.0] * 2)
+                mouse_list.append([0.0] * 2)
         
-        # Create mapping
-        self.action_mapping = {a: i for i, a in enumerate(sorted(all_actions))}
-        self.reverse_mapping = {i: a for a, i in self.action_mapping.items()}
+        self.action_mapping = {"continuous": True} # dummy for compatibility
         
-        # Convert to tensor
-        action_tensor = torch.tensor([self.action_mapping[a] for a in parsed_actions], dtype=torch.long)
-        
-        return action_tensor
+        return (torch.tensor(keys_list, dtype=torch.float32),
+                torch.tensor(clicks_list, dtype=torch.float32),
+                torch.tensor(mouse_list, dtype=torch.float32))
     
     def __len__(self):
         return len(self.features)
@@ -117,20 +147,18 @@ class GameplayDataset(Dataset):
         # Structured features
         struct_feat = torch.FloatTensor(self.features[idx])
         
-        # CNN frame: handle legacy 1-channel data and new 2-channel data
+        # CNN frame padding
         frame_data = self.cnn_frames[idx]
         if len(frame_data.shape) == 2:  # Legacy (60, 80)
             cnn_frame = torch.FloatTensor(frame_data).unsqueeze(0) / 255.0
-            # Pad with empty mask channel to match network expecting (2, 60, 80)
-            empty_mask = torch.zeros_like(cnn_frame)
-            cnn_frame = torch.cat([cnn_frame, empty_mask], dim=0)
-        else:  # New (2, 60, 80)
+            cnn_frame = cnn_frame.repeat(5, 1, 1) # pad to 5 channels
+        else:
             cnn_frame = torch.FloatTensor(frame_data) / 255.0
+            if cnn_frame.shape[0] < 5:
+                pad = torch.zeros((5 - cnn_frame.shape[0], 60, 80))
+                cnn_frame = torch.cat([cnn_frame, pad], dim=0)
         
-        # Action label
-        action = self.actions[idx]
-        
-        return struct_feat, cnn_frame, action
+        return struct_feat, cnn_frame, self.actions_keys[idx], self.actions_clicks[idx], self.actions_mouse[idx]
 
 
 class BehaviorCloningTrainer:
@@ -142,8 +170,7 @@ class BehaviorCloningTrainer:
         
         self.model = None
         self.optimizer = None
-        self.criterion = nn.CrossEntropyLoss()
-        self.num_actions = 8  # Updated when dataset is loaded
+        self.num_actions = 9  # 5 keys + 2 clicks + 2 mouse
         
     def train(self, epochs: int = 50, batch_size: int = 32):
         """Train the hybrid behavior cloning model"""
@@ -231,20 +258,29 @@ class BehaviorCloningTrainer:
             train_total = 0
             
             pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs} [Train]")
-            for struct_feats, cnn_frames, actions in pbar:
+            for struct_feats, cnn_frames, tgt_keys, tgt_clicks, tgt_mouse in pbar:
                 struct_feats = struct_feats.to(self.device)
                 cnn_frames = cnn_frames.to(self.device)
-                actions = actions.to(self.device)
+                tgt_keys = tgt_keys.to(self.device)
+                tgt_clicks = tgt_clicks.to(self.device)
+                tgt_mouse = tgt_mouse.to(self.device)
                 
                 # Forward pass
                 self.optimizer.zero_grad()
                 
                 if is_hybrid:
-                    outputs = self.model(struct_feats, cnn_frames)
+                    out_keys, out_clicks, out_mouse = self.model(struct_feats, cnn_frames)
                 else:
-                    outputs = self.model(struct_feats)
+                    continue # MLP fallback not supported with continuous heads
                 
-                loss = self.criterion(outputs, actions)
+                bce = nn.BCEWithLogitsLoss()
+                mse = nn.MSELoss()
+                
+                loss_keys = bce(out_keys, tgt_keys)
+                loss_clicks = bce(out_clicks, tgt_clicks)
+                loss_mouse = mse(out_mouse, tgt_mouse)
+                
+                loss = loss_keys + loss_clicks + loss_mouse
                 
                 # Backward pass
                 loss.backward()
@@ -252,13 +288,11 @@ class BehaviorCloningTrainer:
                 
                 # Statistics
                 train_loss += loss.item() * struct_feats.size(0)
-                _, predicted = torch.max(outputs.data, 1)
-                train_total += actions.size(0)
-                train_correct += (predicted == actions).sum().item()
+                train_total += struct_feats.size(0)
                 
                 pbar.set_postfix({
                     'loss': f"{loss.item():.4f}",
-                    'acc': f"{train_correct/train_total:.3f}"
+                    'mse': f"{loss_mouse.item():.4f}"
                 })
             
             train_loss /= train_size
@@ -271,29 +305,31 @@ class BehaviorCloningTrainer:
             val_total = 0
             
             with torch.no_grad():
-                for struct_feats, cnn_frames, actions in val_loader:
+                for struct_feats, cnn_frames, tgt_keys, tgt_clicks, tgt_mouse in val_loader:
                     struct_feats = struct_feats.to(self.device)
                     cnn_frames = cnn_frames.to(self.device)
-                    actions = actions.to(self.device)
+                    tgt_keys = tgt_keys.to(self.device)
+                    tgt_clicks = tgt_clicks.to(self.device)
+                    tgt_mouse = tgt_mouse.to(self.device)
                     
                     if is_hybrid:
-                        outputs = self.model(struct_feats, cnn_frames)
+                        out_keys, out_clicks, out_mouse = self.model(struct_feats, cnn_frames)
                     else:
-                        outputs = self.model(struct_feats)
+                        continue
                     
-                    loss = self.criterion(outputs, actions)
+                    bce = nn.BCEWithLogitsLoss()
+                    mse = nn.MSELoss()
+                    
+                    loss = bce(out_keys, tgt_keys) + bce(out_clicks, tgt_clicks) + mse(out_mouse, tgt_mouse)
                     
                     val_loss += loss.item() * struct_feats.size(0)
-                    _, predicted = torch.max(outputs.data, 1)
-                    val_total += actions.size(0)
-                    val_correct += (predicted == actions).sum().item()
+                    val_total += struct_feats.size(0)
             
             val_loss /= val_size
-            val_acc = val_correct / val_total
             
             print(f"Epoch {epoch+1}/{epochs}:")
-            print(f"  Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.3f}")
-            print(f"  Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.3f}")
+            print(f"  Train Loss: {train_loss:.4f}")
+            print(f"  Val Loss: {val_loss:.4f}")
             
             # Save best model
             if val_loss < best_val_loss:
